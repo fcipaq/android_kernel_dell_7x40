@@ -36,3 +36,10 @@ However this project is targeted to support a regular Ubuntu desktop OS on the D
     * Sensors & GPS (no plans to do anything about it)
   
 As the kernel supports both OS (Android and Ubuntu) work on the LXC-container my begin.
+
+Source
+============
+
+Original source code from Google can be downloaded here:
+
+https://android.googlesource.com/kernel/x86_64/+/android-x86_64-fugu-3.10-nougat
