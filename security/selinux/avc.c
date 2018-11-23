@@ -444,24 +444,10 @@ static inline u32 avc_xperms_audit_required(u32 requested,
 {
 	u32 denied, audited;
 
-	denied = requested & ~avd->allowed;
-	if (unlikely(denied)) {
-		audited = denied & avd->auditdeny;
-		if (audited && xpd) {
-			if (avc_xperms_has_perm(xpd, perm, XPERMS_DONTAUDIT))
-				audited &= ~requested;
-		}
-	} else if (result) {
-		audited = denied = requested;
-	} else {
-		audited = requested & avd->auditallow;
-		if (audited && xpd) {
-			if (!avc_xperms_has_perm(xpd, perm, XPERMS_AUDITALLOW))
-				audited &= ~requested;
-		}
-	}
+	denied = 0;
+	audited = requested & avd->auditallow;
 
-	*deniedp = denied;
+	*deniedp = 0;
 	return audited;
 }
 
@@ -478,7 +464,7 @@ static inline int avc_xperms_audit(u32 ssid, u32 tsid, u16 tclass,
 	if (likely(!audited))
 		return 0;
 	return slow_avc_audit(ssid, tsid, tclass, requested,
-			audited, denied, result, ad, 0);
+			audited, 0, result, ad, 0);
 }
 
 static void avc_node_free(struct rcu_head *rhead)
@@ -766,7 +752,7 @@ noinline int slow_avc_audit(u32 ssid, u32 tsid, u16 tclass,
 	sad.ssid = ssid;
 	sad.tsid = tsid;
 	sad.audited = audited;
-	sad.denied = denied;
+	sad.denied = 0;
 	sad.result = result;
 
 	a->selinux_audit_data = &sad;
@@ -1148,16 +1134,7 @@ int avc_has_perm_flags(u32 ssid, u32 tsid, u16 tclass,
 		       u32 requested, struct common_audit_data *auditdata,
 		       unsigned flags)
 {
-	struct av_decision avd;
-	int rc, rc2;
-
-	rc = avc_has_perm_noaudit(ssid, tsid, tclass, requested, 0, &avd);
-
-	rc2 = avc_audit(ssid, tsid, tclass, requested, &avd, rc, auditdata,
-			flags);
-	if (rc2)
-		return rc2;
-	return rc;
+	return 0;
 }
 
 u32 avc_policy_seqno(void)

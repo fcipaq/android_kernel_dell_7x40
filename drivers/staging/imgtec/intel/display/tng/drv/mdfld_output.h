@@ -37,8 +37,6 @@
 
 #include "psb_drv.h"
 
-#ifdef CONFIG_SUPPORT_MIPI
-
 #define TPO_PANEL_WIDTH		84
 #define TPO_PANEL_HEIGHT	46
 #define TMD_PANEL_WIDTH		53 /* PR3 */
@@ -102,6 +100,7 @@ struct panel_funcs {
 	int (*set_brightness)(struct mdfld_dsi_config *dsi_config, int level);
 	int (*drv_ic_init)(struct mdfld_dsi_config *dsi_config);
 	int (*drv_set_panel_mode)(struct mdfld_dsi_config *dsi_config);
+	int (*enable_pixel_shift)(int *max_x, int *max_y);
 };
 
 struct intel_mid_panel_list {
@@ -110,12 +109,9 @@ struct intel_mid_panel_list {
 	void (*panel_init)(struct drm_device *, struct panel_funcs *);
 };
 
+extern void mdfld_output_init(struct drm_device *dev);
 extern enum panel_type get_panel_type(struct drm_device *dev, int pipe);
 extern bool is_dual_dsi(struct drm_device *dev);
 extern bool is_dual_panel(struct drm_device *dev);
-extern mdfld_dsi_encoder_t is_panel_vid_or_cmd(struct drm_device *dev);
-#endif
-
-extern void mdfld_output_init(struct drm_device *dev);
 
 #endif

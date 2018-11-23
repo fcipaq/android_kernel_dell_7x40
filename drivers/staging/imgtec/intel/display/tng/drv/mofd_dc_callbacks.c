@@ -29,18 +29,21 @@
 #include "psb_fb.h"
 #include "psb_intel_reg.h"
 #include "displayclass_interface.h"
-#include "pwr_mgmt.h"
-
-#ifdef CONFIG_SUPPORT_MIPI
 #include "mdfld_dsi_output.h"
+#include "pwr_mgmt.h"
 #include "mdfld_dsi_dbi_dsr.h"
-#endif
-
 #include <linux/kernel.h>
-#include <linux/string.h>
+//#include <string.h>
 #include "android_hdmi.h"
 
 #define KEEP_UNUSED_CODE 0
+
+static bool sprite_x_rev = false;
+static bool sprite_y_rev = false;
+static u32 primary_offset_x;
+static u32 primary_offset_y;
+static u32 primary_width;
+static u32 primary_height;
 
 #if KEEP_UNUSED_CODE
 static int FindCurPipe(struct drm_device *dev)
@@ -148,17 +151,14 @@ void DCCBFlipToSurface(struct drm_device *dev, unsigned long uiAddr,
 	u32 dspstride;
 	u32 reg_offset;
 	u32 val = 0;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
-#endif
 
 	DRM_DEBUG("%s %s %d, uiAddr = 0x%lx\n", __FILE__, __func__,
 			  __LINE__, uiAddr);
 
 	user_mode_start(dev_priv);
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (pipeflag == 0) {
 		dsi_config = dev_priv->dsi_configs[0];
 		reg_offset = 0;
@@ -172,23 +172,17 @@ void DCCBFlipToSurface(struct drm_device *dev, unsigned long uiAddr,
 		DRM_ERROR("%s: invalid pipe %u\n", __func__, pipeflag);
 		return;
 	}
-#else
-	if (pipeflag == 1)
-		reg_offset = 0x1000;
-	else
-		return;
-#endif
+
 	/*update format*/
 	val = (0x80000000 | uiFormat);
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (dsi_config) {
 		dsi_ctx = &dsi_config->dsi_hw_context;
 		dsi_ctx->dspstride = uiStride;
 		dsi_ctx->dspcntr = val;
 		dsi_ctx->dspsurf = uiAddr;
 	}
-#endif
+
 	dspsurf = DSPASURF + reg_offset;
 	dspcntr = DSPACNTR + reg_offset;
 	dspstride = DSPASTRIDE + reg_offset;
@@ -203,9 +197,7 @@ void DCCBFlipToSurface(struct drm_device *dev, unsigned long uiAddr,
 static bool is_vblank_period(struct drm_device *dev, int pipe)
 {
 	struct drm_psb_private *dev_priv = NULL;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
-#endif
 	struct android_hdmi_priv *hdmi_priv = NULL;
 	u32 reg_offset = 0;
 	int vdisplay = 0, vrefresh = 0;
@@ -219,7 +211,6 @@ static bool is_vblank_period(struct drm_device *dev, int pipe)
 	dev_priv = (struct drm_psb_private *)dev->dev_private;
 
 	switch (pipe) {
-#ifdef CONFIG_SUPPORT_MIPI
 	case PIPEA:
 		reg_offset = 0;
 		dsi_config = dev_priv->dsi_configs[0];
@@ -228,7 +219,6 @@ static bool is_vblank_period(struct drm_device *dev, int pipe)
 			vrefresh = dsi_config->mode->vrefresh;
 		}
 		break;
-#endif
 	case PIPEB:
 		reg_offset = 0x1000;
 		hdmi_priv = dev_priv->hdmi_priv;
@@ -237,7 +227,6 @@ static bool is_vblank_period(struct drm_device *dev, int pipe)
 			vrefresh = hdmi_priv->current_mode->vrefresh;
 		}
 		break;
-#ifdef CONFIG_SUPPORT_MIPI
 	case PIPEC:
 		reg_offset = 0x2000;
 		dsi_config = dev_priv->dsi_configs[1];
@@ -246,7 +235,6 @@ static bool is_vblank_period(struct drm_device *dev, int pipe)
 			vrefresh = dsi_config->mode->vrefresh;
 		}
 		break;
-#endif
 	default:
 		DRM_ERROR("Invalid pipe %d\n", pipe);
 		return false;
@@ -278,11 +266,10 @@ void DCCBFlipOverlay(struct drm_device *dev,
 			struct intel_dc_overlay_ctx *ctx)
 {
 	struct drm_psb_private *dev_priv;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
-#endif
 	u32 ovadd_reg = OV_OVADD;
+	u32 ovadd;
 
 	if (!dev || !ctx)
 		return;
@@ -296,7 +283,6 @@ void DCCBFlipOverlay(struct drm_device *dev,
 
 	ctx->ovadd |= 1;
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (ctx->pipe == 0)
 		dsi_config = dev_priv->dsi_configs[0];
 	else if (ctx->pipe == 2)
@@ -309,21 +295,30 @@ void DCCBFlipOverlay(struct drm_device *dev,
 		else if (ctx->index == 1)
 			dsi_ctx->ovcadd = ctx->ovadd;
 	}
-#endif
 
-	/*Flip surf*/
-	PSB_WVDC32(ctx->ovadd, ovadd_reg);
+	ovadd = PSB_RVDC32(ovadd_reg);
+	if ((ovadd & BIT15) &&
+		((ovadd & OV_PIPE_SELECT) != (ctx->ovadd & OV_PIPE_SELECT))) {
+		PSB_WVDC32(ovadd & (~BIT15), ovadd_reg);
+		DRM_INFO("overlay dynamic switch, disable first, ovadd 0x%x, flip 0x%x\n",
+				ovadd, ctx->ovadd);
+	} else {
+		PSB_WVDC32(ctx->ovadd, ovadd_reg);
+	}
 }
 
 void DCCBFlipSprite(struct drm_device *dev,
 			struct intel_dc_sprite_ctx *ctx)
 {
 	struct drm_psb_private *dev_priv;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
-#endif
+	struct drm_display_mode *fixed_mode = NULL;
 	u32 reg_offset = 0x3000;
+	u32 reg_val_pos;
+	u32 reg_val_size;
+	u32 ovadd_reg = OV_OVADD;
+	u32 ovadd;
 
 	if (!dev || !ctx)
 		return;
@@ -332,25 +327,21 @@ void DCCBFlipSprite(struct drm_device *dev,
 
 	user_mode_start(dev_priv);
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (ctx->index == 1) {
 		reg_offset = 0x4000;
 	} else if (ctx->index == 2) {
 		reg_offset = 0x5000;
-	} else
-#endif
-	if (ctx->index == 0) {
+	} else if (ctx->index == 0) {
 		reg_offset = 0x3000;
 	} else {
 		DRM_ERROR("%s: invalid index\n", __func__);
 	}
 
-	/* asign sprite to pipe */
+	/* assign sprite to pipe */
 	ctx->cntr &= ~DISPPLANE_SEL_PIPE_MASK;
 
 	if (ctx->pipe == 1)
 		ctx->cntr |= DISPPLANE_SEL_PIPE_B;
-#ifdef CONFIG_SUPPORT_MIPI
 	else if (ctx->pipe == 0) {
 		ctx->cntr |= DISPPLANE_SEL_PIPE_A;
 		dsi_config = dev_priv->dsi_configs[0];
@@ -358,13 +349,136 @@ void DCCBFlipSprite(struct drm_device *dev,
 		ctx->cntr |= DISPPLANE_SEL_PIPE_C;
 		dsi_config = dev_priv->dsi_configs[1];
 	}
-#endif
-	if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
-		PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
 
-	if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
-		PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
-		PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+	if (dsi_config)
+	    fixed_mode = dsi_config->fixed_mode;
+	ovadd = PSB_RVDC32(ovadd_reg);
+
+	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+                u32 sprite_offset_x;
+                u32 sprite_offset_y;
+                u32 sprite_width;
+                u32 sprite_height;
+		u32 x, y, w, h;
+
+                reg_val_pos = ctx->pos;
+                x = sprite_offset_x = reg_val_pos & 0x00000fff;
+                y = sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
+                reg_val_size = ctx->size;
+                w = sprite_width = reg_val_size & 0x00000fff;
+                h = sprite_height = (reg_val_size >> 16) & 0x00000fff;
+
+		if (!sprite_x_rev) {
+                        sprite_offset_x += dev_priv->amoled_shift.curr_x;
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_x + w) >= (primary_offset_x + primary_width)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) != fixed_mode->hdisplay)
+                                                            && ((y + h + 1) == fixed_mode->vdisplay)))
+                                            ;
+                                    else
+				            sprite_width -= dev_priv->amoled_shift.curr_x;
+				 }
+				 else
+				     sprite_width -= dev_priv->amoled_shift.curr_x;
+			}	
+                }
+                else {
+                        sprite_offset_x += (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_x + w) >= (primary_offset_x + primary_width)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) != fixed_mode->hdisplay)
+                                                            && ((y + h + 1) == fixed_mode->vdisplay)))
+                                            ;
+                                    else
+					    sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+				 }
+				 else
+				     sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+			}
+                }
+
+                if (!sprite_y_rev) {
+                        sprite_offset_y += dev_priv->amoled_shift.curr_y;
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_y + h) >= (primary_offset_y + primary_height)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) == fixed_mode->hdisplay)
+                                                            && ((y + h + 1) != fixed_mode->vdisplay)))
+                                            ;
+                                    else
+					    sprite_height -= dev_priv->amoled_shift.curr_y;
+				 }
+				 else
+				     sprite_height -= dev_priv->amoled_shift.curr_y;
+			}
+                }
+                else {
+			sprite_offset_y += (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+			if (((w == primary_width) && (h == primary_height)) ||
+			    ((sprite_offset_y + h) >= (primary_offset_y + primary_height)))
+			{
+			         if (fixed_mode) {
+                                    if ((ctx->index == 0x0) && (((x + w + 1) == fixed_mode->hdisplay)
+                                                            && ((y + h + 1) != fixed_mode->vdisplay)))
+                                            ;
+                                    else
+					    sprite_height -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+				 }
+				 else
+				     sprite_height -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+			}
+         	}
+
+                if (dev_priv->amoled_shift.curr_x == dev_priv->amoled_shift.max_x)
+                {
+                        dev_priv->amoled_shift.curr_x = 0;
+                        sprite_x_rev = !sprite_x_rev;
+                }
+
+		if (dev_priv->amoled_shift.curr_y == dev_priv->amoled_shift.max_y)
+                {
+                        dev_priv->amoled_shift.curr_y = 0;
+                        sprite_y_rev = !sprite_y_rev;
+                }
+
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION)) {
+			if (ovadd == 0x0)
+                        	reg_val_pos = (reg_val_pos & 0xf000f000) | sprite_offset_x | (sprite_offset_y << 16);
+			else 
+                        	reg_val_pos = (reg_val_pos & 0xf000f000) | x | (y << 16);
+			PSB_WVDC32(reg_val_pos, DSPAPOS + reg_offset);
+                }
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+			if (fixed_mode) {
+                        	if ((sprite_offset_x + sprite_width + 1) > fixed_mode->hdisplay)
+					sprite_width = (fixed_mode->hdisplay - 1) - sprite_offset_x;
+
+                        	if ((sprite_offset_y + sprite_height + 1) > fixed_mode->vdisplay)
+					sprite_height = (fixed_mode->vdisplay -1) - sprite_offset_y;
+			}
+
+			if (ovadd == 0x0) 
+                        	reg_val_size = (reg_val_size & 0xf000f000) | sprite_width | (sprite_height << 16);
+			else
+                        	reg_val_size = (reg_val_size & 0xf000f000) | w | (h << 16);
+                        PSB_WVDC32(reg_val_size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
+	} 
+	else {
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
+			PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+                        PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
 	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_CONSTALPHA)) {
@@ -384,29 +498,34 @@ void DCCBFlipSprite(struct drm_device *dev,
 		PSB_WVDC32(ctx->surf, DSPASURF + reg_offset);
 	}
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (dsi_config) {
 		dsi_ctx = &dsi_config->dsi_hw_context;
-		dsi_ctx->sprite_dsppos = ctx->pos;
-		dsi_ctx->sprite_dspsize = ctx->size;
+		if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+			dsi_ctx->sprite_dsppos = reg_val_pos;
+			dsi_ctx->sprite_dspsize = reg_val_size;
+		}
+		else {
+			dsi_ctx->sprite_dsppos = ctx->pos;
+			dsi_ctx->sprite_dspsize = ctx->size;
+		}
 		dsi_ctx->sprite_dspstride = ctx->stride;
 		dsi_ctx->sprite_dspcntr = ctx->cntr | ((PSB_RVDC32(DSPACNTR + reg_offset) & DISPPLANE_GAMMA_ENABLE));
 		dsi_ctx->sprite_dsplinoff = ctx->linoff;
 		dsi_ctx->sprite_dspsurf = ctx->surf;
 	}
-#endif
 }
 
 void DCCBFlipPrimary(struct drm_device *dev,
 			struct intel_dc_primary_ctx *ctx)
 {
 	struct drm_psb_private *dev_priv;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
-#endif
+	struct drm_display_mode *fixed_mode = NULL;
 	u32 reg_offset;
 	int pipe;
+	u32 reg_val_pos;
+	u32 reg_val_size;
 
 	if (!dev || !ctx)
 		return;
@@ -415,33 +534,109 @@ void DCCBFlipPrimary(struct drm_device *dev,
 
 	user_mode_start(dev_priv);
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (ctx->index == 0) {
 		reg_offset = 0;
 		dsi_config = dev_priv->dsi_configs[0];
 		pipe = 0;
-	} else
-#endif
-	if (ctx->index == 1) {
+	} else if (ctx->index == 1) {
 		reg_offset = 0x1000;
 		pipe = 1;
-	}
-#ifdef CONFIG_SUPPORT_MIPI
-	else if (ctx->index == 2) {
+	} else if (ctx->index == 2) {
 		reg_offset = 0x2000;
 		dsi_config = dev_priv->dsi_configs[1];
 		pipe = 2;
-	}
-#endif
-	else
+	} else
 		return;
 
-	if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
-		PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+	if (dsi_config)
+	    fixed_mode = dsi_config->fixed_mode;
+	
+	if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+                u32 sprite_offset_x;
+                u32 sprite_offset_y;
+                u32 sprite_width;
+                u32 sprite_height;
+		u32 x, y, w, h;
 
-	if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
-		PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
-		PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                reg_val_pos = ctx->pos;
+                x = primary_offset_x = sprite_offset_x = reg_val_pos & 0x00000fff;
+                y = primary_offset_y = sprite_offset_y = (reg_val_pos >> 16) & 0x00000fff;
+                reg_val_size = ctx->size;
+                w = primary_width = sprite_width = reg_val_size & 0x00000fff;
+                h = primary_height = sprite_height = (reg_val_size >> 16) & 0x00000fff;
+
+		if (!sprite_x_rev) {
+                        sprite_offset_x += dev_priv->amoled_shift.curr_x;
+			 if (fixed_mode) {
+                            if (((x + w + 1) != fixed_mode->hdisplay) && ((y + h + 1) == fixed_mode->vdisplay))
+                                ;
+                            else
+                                sprite_width -= dev_priv->amoled_shift.curr_x;
+			 }
+			 else
+                 		sprite_width -= dev_priv->amoled_shift.curr_x;
+                }
+                else {
+                        sprite_offset_x += (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+			 if (fixed_mode) {
+                            if (((x + w + 1) != fixed_mode->hdisplay) && ((y + h + 1) == fixed_mode->vdisplay))
+                                    ;
+                            else
+                                sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+			 }
+			 else
+			     sprite_width -= (dev_priv->amoled_shift.max_x - dev_priv->amoled_shift.curr_x);
+                }
+
+                if (!sprite_y_rev) {
+			sprite_offset_y += dev_priv->amoled_shift.curr_y;
+			if (fixed_mode) {
+                           if (((x + w + 1) == fixed_mode->hdisplay) && ((y + h + 1) != fixed_mode->vdisplay))
+                                    ;
+                           else
+                               sprite_height -= dev_priv->amoled_shift.curr_y;
+			}
+			else
+			    sprite_height -= dev_priv->amoled_shift.curr_y;
+                }
+                else {
+			sprite_offset_y += (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+			if (fixed_mode) {
+                           if (((x + w + 1) == fixed_mode->hdisplay) && ((y + h + 1) != fixed_mode->vdisplay))
+                                    ;
+                           else
+                               sprite_height  -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+			}
+			else
+		            sprite_height  -= (dev_priv->amoled_shift.max_y - dev_priv->amoled_shift.curr_y);
+                }
+
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION)) {
+			reg_val_pos = (reg_val_pos & 0xf000f000) | sprite_offset_x | (sprite_offset_y << 16);
+			PSB_WVDC32(reg_val_pos, DSPAPOS + reg_offset);
+                }
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+			if (fixed_mode) {
+                        	if ((sprite_offset_x + sprite_width + 1) > fixed_mode->hdisplay)
+					sprite_width = (fixed_mode->hdisplay - 1) - sprite_offset_x;
+
+                        	if ((sprite_offset_y + sprite_height + 1) > fixed_mode->vdisplay)
+					sprite_height = (fixed_mode->vdisplay -1) - sprite_offset_y;
+			}
+                        reg_val_size  = (reg_val_size & 0xf000f000) | sprite_width | (sprite_height << 16);
+                        PSB_WVDC32(reg_val_size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
+	} 
+	else {
+		if ((ctx->update_mask & SPRITE_UPDATE_POSITION))
+			PSB_WVDC32(ctx->pos, DSPAPOS + reg_offset);
+
+                if ((ctx->update_mask & SPRITE_UPDATE_SIZE)) {
+                        PSB_WVDC32(ctx->size, DSPASIZE + reg_offset);
+                        PSB_WVDC32(ctx->stride, DSPASTRIDE + reg_offset);
+                }
 	}
 
 	if ((ctx->update_mask & SPRITE_UPDATE_CONSTALPHA)) {
@@ -461,17 +656,21 @@ void DCCBFlipPrimary(struct drm_device *dev,
 		PSB_WVDC32(ctx->surf, DSPASURF + reg_offset);
 	}
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (dsi_config) {
 		dsi_ctx = &dsi_config->dsi_hw_context;
-		dsi_ctx->dsppos = ctx->pos;
-		dsi_ctx->dspsize = ctx->size;
+		if (dev_priv->amoled_shift.max_x || dev_priv->amoled_shift.max_y) {
+			dsi_ctx->dsppos = reg_val_pos;
+			dsi_ctx->dspsize = reg_val_size;
+		}
+		else {
+			dsi_ctx->dsppos = ctx->pos;
+			dsi_ctx->dspsize = ctx->size;
+		}
 		dsi_ctx->dspstride = ctx->stride;
 		dsi_ctx->dspcntr = ctx->cntr | ((PSB_RVDC32(DSPACNTR + reg_offset) & DISPPLANE_GAMMA_ENABLE));
 		dsi_ctx->dsplinoff = ctx->linoff;
 		dsi_ctx->dspsurf = ctx->surf;
 	}
-#endif
 }
 
 void DCCBFlipCursor(struct drm_device *dev,
@@ -547,7 +746,6 @@ static int _GetPipeFromOvadd(u32 ovadd)
 	return pipe;
 }
 
-#if 0
 static void _OverlayWaitVblank(struct drm_device *dev, int pipe)
 {
 	union drm_wait_vblank vblwait;
@@ -567,44 +765,36 @@ static void _OverlayWaitVblank(struct drm_device *dev, int pipe)
 		DRM_ERROR("%s: fail to wait vsync of pipe %d\n", __func__, pipe);
 	}
 }
-#endif
 
 static void _OverlayWaitFlip(struct drm_device *dev, u32 ovstat_reg,
 			int index, int pipe)
 {
-	int retry = 600;
-#ifdef CONFIG_SUPPORT_MIPI
+	int retry;
 	int ret = -EBUSY;
 
 	/* HDMI pipe can run as low as 24Hz */
+	retry = 600;
 	if (pipe != 1) {
 		retry = 200;  /* 60HZ for MIPI */
 		DCCBDsrForbid(dev, pipe);
 	}
-#else
-	if (pipe != 1)
-		return;
-#endif
 	/**
 	 * make sure overlay command buffer
 	 * was copied before updating the system
 	 * overlay command buffer.
 	 */
 	while (--retry) {
-#ifdef CONFIG_SUPPORT_MIPI
 		if (pipe != 1 && ret == -EBUSY) {
 			ret = DCCBUpdateDbiPanel(dev, pipe);
 		}
-#endif
 		if (BIT31 & PSB_RVDC32(ovstat_reg))
 			break;
 		udelay(100);
 	}
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (pipe != 1)
 		DCCBDsrAllow(dev, pipe);
-#endif
+
 	if (!retry)
 		DRM_ERROR("OVADD %d flip timeout on pipe %d!\n", index, pipe);
 }
@@ -644,15 +834,14 @@ int DCCBOverlayDisableAndWait(struct drm_device *dev, u32 ctx,
 int DCCBOverlayEnable(struct drm_device *dev, u32 ctx,
 			int index, int enabled)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx;
-#endif
-	int pipe;
 	u32 ovadd_reg = OV_OVADD;
 	u32 ovstat_reg = OV_DOVASTA;
 	u32 power_islands = OSPM_DISPLAY_A;
+	int pipe;
+	uint32_t pipeconf = PIPEACONF;
 
 	if (index != 0 && index != 1) {
 		DRM_ERROR("Invalid overlay index %d\n", index);
@@ -666,7 +855,7 @@ int DCCBOverlayEnable(struct drm_device *dev, u32 ctx,
 	}
 
 	pipe = _GetPipeFromOvadd(ctx);
-#ifdef CONFIG_SUPPORT_MIPI
+
 	if (!enabled) {
 		if (pipe == 0)
 			dsi_config = dev_priv->dsi_configs[0];
@@ -681,14 +870,22 @@ int DCCBOverlayEnable(struct drm_device *dev, u32 ctx,
 				dsi_ctx->ovcadd = 0;
 		}
 	}
-#endif
+
+	if (pipe == 1)
+		power_islands |= OSPM_DISPLAY_B;
+	else if (pipe == 2)
+		power_islands |= OSPM_DISPLAY_C;
 
 	if (power_island_get(power_islands)) {
 		/*make sure previous flip was done*/
-		_OverlayWaitFlip(dev, ovstat_reg, index, pipe);
-#if 0
-		_OverlayWaitVblank(dev, pipe);
-#endif
+		//_OverlayWaitFlip(dev, ovstat_reg, index, pipe);
+		//_OverlayWaitVblank(dev, pipe);
+
+		pipeconf = PIPEACONF + 0x1000 * pipe;
+		if (PSB_RVDC32(pipeconf) & BIT31) {
+			/* avoid writing ovadd during vblank perioid */
+			DCCBAvoidFlipInVblankInterval(dev, pipe);
+		}
 
 		PSB_WVDC32(ctx, ovadd_reg);
 
@@ -701,11 +898,9 @@ int DCCBSpriteEnable(struct drm_device *dev, u32 ctx,
 			int index, int enabled)
 {
 	u32 power_islands = (OSPM_DISPLAY_A | OSPM_DISPLAY_C);
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx = NULL;
-#endif
 	u32 reg_offset;
 	u32 dspcntr_reg = DSPACNTR;
 	u32 dspsurf_reg = DSPASURF;
@@ -714,33 +909,29 @@ int DCCBSpriteEnable(struct drm_device *dev, u32 ctx,
 	case 0:
 		reg_offset = 0x3000;
 		break;
-#ifdef CONFIG_SUPPORT_MIPI
 	case 1:
 		reg_offset = 0x4000;
 		break;
 	case 2:
 		reg_offset = 0x5000;
 		break;
-#endif
 	default:
 		DRM_ERROR("Invalid sprite index %d\n", index);
 		return -EINVAL;
 	}
-#ifdef CONFIG_SUPPORT_MIPI
+
 	/* FIXME: need to check pipe info here. */
 	dsi_config = dev_priv->dsi_configs[0];
 
 	if (dsi_config)
 		dsi_ctx = &dsi_config->dsi_hw_context;
-#endif
+
 	dspcntr_reg += reg_offset;
 	dspsurf_reg += reg_offset;
 
 	if (power_island_get(power_islands)) {
-#ifdef CONFIG_SUPPORT_MIPI
 		if (dsi_ctx)
 			dsi_ctx->sprite_dspcntr &= ~DISPLAY_PLANE_ENABLE;
-#endif
 		PSB_WVDC32((PSB_RVDC32(dspcntr_reg) & ~DISPLAY_PLANE_ENABLE),
 				dspcntr_reg);
 		PSB_WVDC32((PSB_RVDC32(dspsurf_reg)), dspsurf_reg);
@@ -755,10 +946,8 @@ int DCCBPrimaryEnable(struct drm_device *dev, u32 ctx,
 {
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct psb_gtt *pg = dev_priv->pg;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
 	struct mdfld_dsi_hw_context *dsi_ctx = NULL;
-#endif
 	u32 reg_offset;
 
 	if (index < 0 || index > 2) {
@@ -766,7 +955,6 @@ int DCCBPrimaryEnable(struct drm_device *dev, u32 ctx,
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (index == 0) {
 		dsi_config = dev_priv->dsi_configs[0];
 		reg_offset = 0;
@@ -788,12 +976,7 @@ int DCCBPrimaryEnable(struct drm_device *dev, u32 ctx,
 		dsi_ctx->dsplinoff = 0;
 		dsi_ctx->dspsurf = pg->reserved_gtt_start;
 	}
-#else
-	if (index == 1)
-		reg_offset = 0x1000;
-	else
-		return -EINVAL;
-#endif
+
 	PSB_WVDC32(0, DSPAPOS + reg_offset);
 	PSB_WVDC32((63 << 16) | 63, DSPASIZE + reg_offset);
 	PSB_WVDC32((64 << 2), DSPASTRIDE + reg_offset);
@@ -836,7 +1019,6 @@ int DCCBCursorDisable(struct drm_device *dev, int index)
 
 int DCCBUpdateDbiPanel(struct drm_device *dev, int pipe)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv =
 		(struct drm_psb_private *)dev->dev_private;
 	struct mdfld_dsi_config *dsi_config = NULL;
@@ -849,14 +1031,10 @@ int DCCBUpdateDbiPanel(struct drm_device *dev, int pipe)
 			dev_priv->dsi_configs[0] : dev_priv->dsi_configs[1];
 
 	return mdfld_dsi_dsr_update_panel_fb(dsi_config);
-#else
-	return 0;
-#endif
 }
 
 void DCCBWaitForDbiFifoEmpty(struct drm_device *dev, int pipe)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct mdfld_dsi_config *dsi_config;
 	int retry;
@@ -883,20 +1061,12 @@ void DCCBWaitForDbiFifoEmpty(struct drm_device *dev, int pipe)
 
 	if (retry == 0)
 		DRM_ERROR("DBI FIFO not empty\n");
-#else
-	return;
-#endif
 }
 
 void DCCBAvoidFlipInVblankInterval(struct drm_device *dev, int pipe)
 {
-
-#ifdef CONFIG_SUPPORT_MIPI
 	if ((pipe == PIPEB) ||
 		(is_panel_vid_or_cmd(dev) == MDFLD_DSI_ENCODER_DPI))
-#else
-	if (pipe == PIPEB)
-#endif
 		is_vblank_period(dev, pipe);
 }
 
@@ -920,7 +1090,6 @@ void DCCBUnblankDisplay(struct drm_device *dev)
 
 void DCCBFlipDSRCb(struct drm_device *dev)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv =
 	    (struct drm_psb_private *)dev->dev_private;
 
@@ -934,7 +1103,6 @@ void DCCBFlipDSRCb(struct drm_device *dev)
 	if (dev_priv->b_dsr_enable && dev_priv->b_is_in_idle) {
 		dev_priv->exit_idle(dev, MDFLD_DSR_2D_3D, NULL, true);
 	}
-#endif
 }
 
 u32 DCCBGetPipeCount(void)
@@ -963,9 +1131,7 @@ int DCCBIsPipeActive(struct drm_device *dev, int pipe)
 {
 	struct drm_psb_private *dev_priv =
 		(struct drm_psb_private *)dev->dev_private;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_config *dsi_config = NULL;
-#endif
 	u32 pipeconf_reg;
 	int active = 0;
 
@@ -984,18 +1150,17 @@ int DCCBIsPipeActive(struct drm_device *dev, int pipe)
 
 	/* get display a for register reading */
 	if (power_island_get(OSPM_DISPLAY_A)) {
-#ifdef CONFIG_SUPPORT_MIPI
 		if ((pipe != 1) && dev_priv->dsi_configs) {
 			dsi_config = (pipe == 0) ? dev_priv->dsi_configs[0] :
 				dev_priv->dsi_configs[1];
 		}
 
 		mdfld_dsi_dsr_forbid(dsi_config);
-#endif
+
 		active = (PSB_RVDC32(pipeconf_reg) & BIT31) ? 1 : 0 ;
-#ifdef CONFIG_SUPPORT_MIPI
+
 		mdfld_dsi_dsr_allow(dsi_config);
-#endif
+
 		power_island_put(OSPM_DISPLAY_A);
 	}
 
@@ -1004,7 +1169,6 @@ int DCCBIsPipeActive(struct drm_device *dev, int pipe)
 
 void DCCBDsrForbid(struct drm_device *dev, int pipe)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv =
 		(struct drm_psb_private *)dev->dev_private;
 	struct mdfld_dsi_config *dsi_config = NULL;
@@ -1017,12 +1181,10 @@ void DCCBDsrForbid(struct drm_device *dev, int pipe)
 			dev_priv->dsi_configs[0] : dev_priv->dsi_configs[1];
 
 	mdfld_dsi_dsr_forbid(dsi_config);
-#endif
 }
 
 void DCCBDsrAllow(struct drm_device *dev, int pipe)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv =
 		(struct drm_psb_private *)dev->dev_private;
 	struct mdfld_dsi_config *dsi_config = NULL;
@@ -1035,7 +1197,6 @@ void DCCBDsrAllow(struct drm_device *dev, int pipe)
 			dev_priv->dsi_configs[0] : dev_priv->dsi_configs[1];
 
 	mdfld_dsi_dsr_allow(dsi_config);
-#endif
 }
 
 int DCCBUpdateCursorPos(struct drm_device *dev, int pipe, uint32_t pos)

@@ -67,9 +67,13 @@ static struct charger_cable cable_list[] = {
 	 .extcon_cable_type = EXTCON_TA,
 	 },
 	{
+	 .psy_cable_type = POWER_SUPPLY_CHARGER_TYPE_DOCK,
+	 .extcon_cable_type = EXTCON_DOCK,
+	},
+	{
 	 .psy_cable_type = POWER_SUPPLY_CHARGER_TYPE_AC,
 	 .extcon_cable_type = EXTCON_AC,
-	 },
+	},
 };
 
 static int get_supplied_by_list(struct power_supply *psy,
@@ -98,9 +102,11 @@ struct charger_cable *get_cable(unsigned long usb_chrgr_type)
 	case POWER_SUPPLY_CHARGER_TYPE_ACA_DOCK:
 		return &cable_list[4];
 	case POWER_SUPPLY_CHARGER_TYPE_AC:
-		return &cable_list[6];
+		return &cable_list[7];
 	case POWER_SUPPLY_CHARGER_TYPE_SE1:
 		return &cable_list[5];
+	case POWER_SUPPLY_CHARGER_TYPE_DOCK:
+		return &cable_list[6];
 	}
 
 	return NULL;
@@ -211,7 +217,6 @@ static void init_charger_cables(struct charger_cable *cable_lst, int count)
 	struct extcon_chrgr_cbl_props cable_props;
 	const char *cable_name;
 	struct power_supply_cable_props cap;
-
 	register_notifier();
 
 	while (--count) {
@@ -242,6 +247,7 @@ static void init_charger_cables(struct charger_cable *cable_lst, int count)
 			cable->cable_props.ma = cable_props.ma;
 		}
 	}
+
 
 	if (!otg_get_chrg_status(otg_xceiver, &cap))
 		process_cable_props(&cap);
@@ -297,14 +303,14 @@ static inline int get_chrgr_prop_cache(struct power_supply *psy,
 
 static void dump_charger_props(struct charger_props *props)
 {
-	pr_devel("%s:name=%s present=%d is_charging=%d health=%d online=%d cable=%lu tstamp=%lu\n",
+	pr_devel("%s:name=%s present=%d is_charging=%d health=%d online=%d cable=%d tstamp=%d\n",
 		__func__, props->name, props->present, props->is_charging,
 		props->health, props->online, props->cable, props->tstamp);
 }
 
 static void dump_battery_props(struct batt_props *props)
 {
-	pr_devel("%s:name=%s voltage_now=%ld current_now=%ld temperature=%d status=%ld health=%d tstamp=%lu algo_stat=%d ",
+	pr_devel("%s:name=%s voltage_now=%d current_now=%d temperature=%d status=%d health=%d tstamp=%d algo_stat=%d ",
 		__func__, props->name, props->voltage_now, props->current_now,
 		props->temperature, props->status, props->health,
 		props->tstamp, props->algo_stat);
@@ -605,7 +611,7 @@ static int get_battery_status(struct power_supply *psy)
 			}
 		}
 	}
-	pr_devel("%s: Set status=%d for %s\n", __func__, status, psy->name);
+	pr_info("%s: Set status=%d for %s\n", __func__, status, psy->name);
 
 	return status;
 }
@@ -913,6 +919,9 @@ static int select_chrgr_cable(struct device *dev, void *data)
 
 		switch_cable(psy, POWER_SUPPLY_CHARGER_TYPE_NONE);
 
+		/* update battery properties */
+		update_sysfs(psy);
+
 		mutex_unlock(&psy_chrgr.evt_lock);
 		power_supply_changed(psy);
 		return 0;
@@ -1107,7 +1116,6 @@ int power_supply_unregister_charging_algo(struct charging_algo *algo)
 }
 EXPORT_SYMBOL(power_supply_unregister_charging_algo);
 
-#if 0
 static struct charging_algo *get_charging_algo_byname(char *algo_name)
 {
 	struct charging_algo *algo;
@@ -1119,7 +1127,6 @@ static struct charging_algo *get_charging_algo_byname(char *algo_name)
 
 	return NULL;
 }
-#endif
 
 static struct charging_algo *get_charging_algo_by_type
 		(enum batt_chrg_prof_type chrg_prof_type)

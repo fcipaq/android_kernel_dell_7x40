@@ -523,6 +523,9 @@ int rmi4_touchpad_f12_irq_handler(struct rmi4_data *pdata, struct rmi4_fn *rfi)
 	/* sync after groups of events */
 	input_sync(pdata->input_ts_dev);
 
+	/* Check for Active Pen events, if available */
+	synaptics_rmi4_apen_attn_check(pdata, rfi->intr_mask);
+
 	return touch_count;
 }
 
@@ -1961,7 +1964,9 @@ void rmi4_suspend(struct rmi4_data *pdata)
 
 void rmi4_resume(struct rmi4_data *pdata)
 {
+	int retval;
 	struct i2c_client *client = pdata->i2c_client;
+	int try = 0;
 	u8 intr_status[4];
 
 	dev_info(&client->dev, "Enter %s", __func__);
@@ -1969,9 +1974,7 @@ void rmi4_resume(struct rmi4_data *pdata)
 	if (pdata->regulator) {
 		/*need wait to stable if regulator first output*/
 		int needwait = !regulator_is_enabled(pdata->regulator);
-		if (regulator_enable(pdata->regulator))
-			dev_err(&client->dev, "Failed to enable regulator\n");
-
+		regulator_enable(pdata->regulator);
 		if (needwait)
 			msleep(50);
 	}
@@ -2377,6 +2380,10 @@ static int rmi4_probe(struct i2c_client *client,
 	input_set_abs_params(rmi4_data->input_ts_dev,
 			ABS_MT_TOUCH_MINOR, 0, MAX_TOUCH_MINOR, 0, 0);
 
+	retval = synaptics_rmi4_apen_init(rmi4_data);
+	if (retval < 0)
+		dev_dbg(&client->dev, "Active Pen not available\n");
+
 	/* Clear interrupts */
 	retval = rmi4_i2c_block_read(rmi4_data,
 			rmi4_data->fn01_data_base_addr + 1,
@@ -2527,6 +2534,8 @@ static const struct i2c_device_id rmi4_id_table[] = {
 	{ S3402_DEV_ID, 0 },
 	{ S3400_CGS_DEV_ID, 0 },
 	{ S3400_IGZO_DEV_ID, 0 },
+	{ S7508_DEV_ID, 0 },
+	{ S7501_DEV_ID, 0 },
 	{ },
 };
 MODULE_DEVICE_TABLE(i2c, rmi4_id_table);

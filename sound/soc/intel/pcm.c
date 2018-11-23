@@ -48,11 +48,15 @@ extern struct snd_compr_ops sst_platform_compr_ops;
 extern struct snd_effect_ops effects_ops;
 
 /* module parameters */
-static int dpcm_enable;
+#ifdef CONFIG_SST_DPCM
+static int dpcm_enable = 1;
+#else
+static int dpcm_enable = 0;
+#endif
 
 /* dpcm_enable should be =0 for mofd_v0 and =1 for mofd_v1 */
-module_param(dpcm_enable, int, 0644);
-MODULE_PARM_DESC(dpcm_enable, "DPCM module parameter");
+//module_param(dpcm_enable, int, 0644);
+//MODULE_PARM_DESC(dpcm_enable, "DPCM module parameter");
 
 static DEFINE_MUTEX(sst_dsp_lock);
 
@@ -690,6 +694,7 @@ static struct snd_soc_dai_driver sst_platform_dai[] = {
 	.ops = &sst_media_dai_ops,
 	.playback = {
 		.stream_name = "Speaker Playback",
+//fcipaq mono
 		.channels_min = SST_MONO,
 		.channels_max = SST_STEREO,
 		.rates = SNDRV_PCM_RATE_44100|SNDRV_PCM_RATE_48000,
@@ -740,6 +745,7 @@ static struct snd_soc_dai_driver sst_platform_dai[] = {
 	.ops = &sst_media_dai_ops,
 	.playback = {
 		.stream_name = "Dummy Power Stream",
+//fcipaq mono
 		.channels_min = SST_MONO,
 		.channels_max = SST_STEREO,
 		.rates = SNDRV_PCM_RATE_8000_48000,
@@ -751,6 +757,7 @@ static struct snd_soc_dai_driver sst_platform_dai[] = {
 	.ops = &sst_probe_dai_ops,
 	.playback = {
 		.stream_name = "Probe Playback",
+//fcipaq mono
 		.channels_min = SST_MONO,
 		.channels_max = SST_STEREO,
 		.rates = SNDRV_PCM_RATE_8000 |
@@ -982,13 +989,13 @@ static int sst_pcm_new(struct snd_soc_pcm_runtime *rtd)
 
 static int sst_soc_probe(struct snd_soc_platform *platform)
 {
+//	struct sst_data *ctx = snd_soc_platform_get_drvdata(platform);
+//	struct soft_platform_id spid;
 	int ret = 0;
 
+//	memcpy(&spid, ctx->pdata->spid, sizeof(spid));
 	pr_debug("Enter:%s\n", __func__);
-	if (dpcm_enable == 1)
-		ret = sst_dsp_init_v2_dpcm(platform);
-	else
-		ret = sst_dsp_init(platform);
+	ret = sst_dsp_init_v2_dpcm(platform);
 	if (ret)
 		return ret;
 	ret = snd_soc_register_effect(platform->card, &effects_ops);

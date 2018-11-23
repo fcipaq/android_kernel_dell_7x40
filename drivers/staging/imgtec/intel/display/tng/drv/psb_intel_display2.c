@@ -24,13 +24,11 @@
  *	Eric Anholt <eric@anholt.net>
  */
 
-#ifdef CONFIG_SUPPORT_MIPI
 #include "mdfld_dsi_dbi.h"
 #include "mdfld_dsi_dpi.h"
 //#include "mdfld_dsi_output.h"
 #ifdef CONFIG_MID_DSI_DPU
 #include "mdfld_dsi_dbi_dpu.h"
-#endif
 #endif
 
 #include "psb_intel_display.h"
@@ -192,12 +190,10 @@ static int mdfld_intel_crtc_cursor_set(struct drm_crtc *crtc,
 		return -ENOMEM;
 	}
 
-	/* insert this bo into gtt */
-	/* DRM_INFO("%s: map meminfo for hw cursor. handle %x, pipe = %d\n",
-	   __FUNCTION__, handle, pipe); */
+	/*insert this bo into gtt */
+//        DRM_INFO("%s: map meminfo for hw cursor. handle %x, pipe = %d \n", __FUNCTION__, handle, pipe);
 
-	ret = psb_gtt_map_meminfo(dev, (void *)(uintptr_t)handle, 0,
-				  &page_offset);
+	ret = psb_gtt_map_meminfo(dev, (void *)handle, 0, &page_offset);
 	if (ret) {
 		DRM_ERROR("Can not map meminfo to GTT. handle 0x%x\n", handle);
 		return ret;
@@ -229,7 +225,6 @@ static int mdfld_intel_crtc_cursor_set(struct drm_crtc *crtc,
 
 static int mdfld_intel_crtc_cursor_move(struct drm_crtc *crtc, int x, int y)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_device *dev = crtc->dev;
 #ifndef CONFIG_MID_DSI_DPU
 	struct drm_psb_private *dev_priv =
@@ -303,7 +298,7 @@ static int mdfld_intel_crtc_cursor_move(struct drm_crtc *crtc, int x, int y)
 		REG_WRITE(base, addr);
 		power_island_put(power_island);
 	}
-#endif
+
 	return 0;
 }
 
@@ -349,7 +344,6 @@ int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 	struct psb_framebuffer *psbfb = to_psb_fb(crtc->fb);
 	struct psb_intel_mode_device *mode_dev = psb_intel_crtc->mode_dev;
 	int pipe = psb_intel_crtc->pipe;
-	struct drm_display_mode *adjusted_mode = NULL;
 	int swapchain_plane = PVRSRV_SWAPCHAIN_ATTACHED_PLANE_NONE;
 	unsigned long Start, Offset;
 	int dsplinoff = DSPALINOFF;
@@ -357,8 +351,6 @@ int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 	int dspstride = DSPASTRIDE;
 	int dspcntr_reg = DSPACNTR;
 	u32 dspcntr;
-	int fb_width, fb_height, bpp;
-	u32 stride = 0;
 	u32 power_island = 0;
 	int ret = 0;
 
@@ -373,13 +365,11 @@ int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 	}
 
 	switch (pipe) {
-#ifdef CONFIG_SUPPORT_MIPI
 	case 0:
 		if (IS_MID(dev))
 			dsplinoff = DSPALINOFF;
 		swapchain_plane = PVRSRV_SWAPCHAIN_ATTACHED_PLANE_A;
 		break;
-#endif
 	case 1:
 		dsplinoff = DSPBLINOFF;
 		dspsurf = DSPBSURF;
@@ -387,7 +377,6 @@ int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 		dspcntr_reg = DSPBCNTR;
 		swapchain_plane = PVRSRV_SWAPCHAIN_ATTACHED_PLANE_B;
 		break;
-#ifdef CONFIG_SUPPORT_MIPI
 	case 2:
 		dsplinoff = DSPCLINOFF;
 		dspsurf = DSPCSURF;
@@ -395,9 +384,8 @@ int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 		dspcntr_reg = DSPCCNTR;
 		swapchain_plane = PVRSRV_SWAPCHAIN_ATTACHED_PLANE_C;
 		break;
-#endif
 	default:
-		DRM_ERROR("Illegal Pipe Number.\n");
+		DRM_ERROR("Illegal Pipe Number. \n");
 		return -EINVAL;
 	}
 
@@ -422,29 +410,7 @@ int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 #endif				/* FIXME MRFLD */
 	}
 #endif
-
-#ifdef CONFIG_SUPPORT_MIPI
 	REG_WRITE(dspstride, crtc->fb->pitches[0]);
-#else
-	stride = crtc->fb->pitches[0];
-	adjusted_mode = &psb_intel_crtc->saved_adjusted_mode;
-
-	if (adjusted_mode) {
-		fb_width = crtc->fb->width;
-		fb_height = crtc->fb->height;
-		bpp = crtc->fb->bits_per_pixel;
-
-		/* panel fitter does not support scaling greater
-		 * than 1.5, using orignal stride of the image */
-		if (fb_width / (float)adjusted_mode->crtc_hdisplay > 1.5 ||
-		    fb_height / (float)adjusted_mode->crtc_vdisplay > 1.5) {
-			stride = ALIGN(adjusted_mode->crtc_hdisplay*(bpp>>3), 64);
-		}
-
-		DRM_INFO("dsp stride=%d bpp=%d\n", stride, bpp);
-	}
-	REG_WRITE(dspstride, stride);
-#endif
 	dspcntr = REG_READ(dspcntr_reg);
 	dspcntr &= ~DISPPLANE_PIXFORMAT_MASK;
 
@@ -494,14 +460,11 @@ void mdfld_disable_crtc(struct drm_device *dev, int pipe)
 	int dspcntr_reg = DSPACNTR;
 	int dspbase_reg = MRST_DSPABASE;
 	int pipeconf_reg = PIPEACONF;
-#ifdef CONFIG_SUPPORT_MIPI
 	u32 gen_fifo_stat_reg = GEN_FIFO_STAT_REG;
-#endif
 	u32 temp;
 
 	PSB_DEBUG_ENTRY("pipe = %d\n", pipe);
 
-#ifdef CONFIG_SUPPORT_MIPI
 #ifndef CONFIG_SUPPORT_TOSHIBA_MIPI_DISPLAY
 	/**
 	 * NOTE: this path only works for TMD panel now. update it to
@@ -511,23 +474,16 @@ void mdfld_disable_crtc(struct drm_device *dev, int pipe)
 			  (get_panel_type(dev, pipe) == TMD_6X10_VID)))
 		return;
 #endif
-#else
-	if (pipe != 1)
-		return;
-#endif
 
 	switch (pipe) {
-#ifdef CONFIG_SUPPORT_MIPI
 	case 0:
 		break;
-#endif
 	case 1:
 		dpll_reg = MDFLD_DPLL_B;
 		dspcntr_reg = DSPBCNTR;
 		dspbase_reg = DSPBSURF;
 		pipeconf_reg = PIPEBCONF;
 		break;
-#ifdef CONFIG_SUPPORT_MIPI
 	case 2:
 		dpll_reg = MRST_DPLL_A;
 		dspcntr_reg = DSPCCNTR;
@@ -535,18 +491,15 @@ void mdfld_disable_crtc(struct drm_device *dev, int pipe)
 		pipeconf_reg = PIPECCONF;
 		gen_fifo_stat_reg = GEN_FIFO_STAT_REG + MIPIC_REG_OFFSET;
 		break;
-#endif
 	default:
-		DRM_ERROR("Illegal Pipe Number.\n");
+		DRM_ERROR("Illegal Pipe Number. \n");
 		return;
 	}
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (pipe != 1)
 		mdfld_dsi_gen_fifo_ready(dev, gen_fifo_stat_reg,
 					 HS_CTRL_FIFO_EMPTY |
 					 HS_DATA_FIFO_EMPTY);
-#endif
 
 	/* Disable display plane */
 	temp = REG_READ(dspcntr_reg);
@@ -1156,7 +1109,6 @@ static int mdfld_crtc_dsi_pll_calc(struct drm_crtc *crtc,
 }
 #endif /* if KEEP_UNUSED_CODE */
 
-#ifdef CONFIG_SUPPORT_MIPI
 static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 				   struct mdfld_dsi_config *dsi_config,
 				   struct drm_display_mode *mode,
@@ -1292,7 +1244,6 @@ static int mdfld_crtc_dsi_mode_set(struct drm_crtc *crtc,
 	mutex_unlock(&dsi_config->context_lock);
 	return 0;
 }
-#endif
 
 #if KEEP_UNUSED_CODE
 static int mdfld_crtc_mode_set(struct drm_crtc *crtc,

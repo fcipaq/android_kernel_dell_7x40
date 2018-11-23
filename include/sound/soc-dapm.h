@@ -244,6 +244,10 @@ struct device;
 {	.id = snd_soc_dapm_supply, .name = wname, .reg = wreg,	\
 	.shift = wshift, .invert = winvert, .event = wevent, \
 	.event_flags = wflags}
+#define SND_SOC_DAPM_POST_SUPPLY(wname, wreg, wshift, winvert, wevent, wflags) \
+{	.id = snd_soc_dapm_post_supply, .name = wname, .reg = wreg,	\
+	.shift = wshift, .invert = winvert, .event = wevent, \
+	.event_flags = wflags}
 #define SND_SOC_DAPM_REGULATOR_SUPPLY(wname, wdelay, wflags)	    \
 {	.id = snd_soc_dapm_regulator_supply, .name = wname, \
 	.reg = SND_SOC_NOPM, .shift = wdelay, .event = dapm_regulator_event, \
@@ -455,6 +459,9 @@ enum snd_soc_dapm_type {
 	snd_soc_dapm_dai_in,		/* link to DAI structure */
 	snd_soc_dapm_dai_out,
 	snd_soc_dapm_dai_link,		/* link between two DAI structures */
+	snd_soc_dapm_post_supply,
+			/* same as snd_soc_dapm_supply, except that it will be handled */
+			/* last in the power up sequence (just before dapm_post) */
 };
 
 enum snd_soc_dapm_subclass {

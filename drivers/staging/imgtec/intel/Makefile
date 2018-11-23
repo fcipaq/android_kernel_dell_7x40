@@ -45,7 +45,6 @@ drm_intel_mid-y += \
  sysconfig.o \
  display/tng/drv/mdfld_csc.o \
  display/tng/drv/mdfld_debugfs.o \
- display/tng/drv/mdfld_hdmi_audio.o \
  display/tng/drv/mdfld_intel_hdcp.o \
  display/tng/drv/mdfld_msic.o \
  display/tng/drv/mdfld_output.o \
@@ -61,33 +60,41 @@ drm_intel_mid-y += \
  display/tng/drv/mrfld_clock.o \
  display/tng/drv/pmu_tng.o \
  display/tng/drv/psb_bl.o \
+ display/tng/drv/psb_dpst.o \
+ display/tng/drv/psb_dpst_func.o \
  display/tng/drv/psb_drv.o \
  display/tng/drv/psb_fb.o \
  display/tng/drv/psb_gtt.o \
  display/tng/drv/psb_hotplug.o \
  display/tng/drv/psb_intel_display.o \
- display/tng/drv/psb_intel_hdmi.o \
  display/tng/drv/psb_irq.o \
  display/tng/drv/psb_socket.o \
  display/tng/drv/psb_umevents.o \
+ display/tng/drv/mdfld_dsi_dbi.o \
+ display/tng/drv/mdfld_dsi_dpi.o \
+ display/tng/drv/mdfld_dsi_output.o \
+ display/tng/drv/mdfld_output.o \
+ display/tng/drv/mdfld_dsi_esd.o \
+ display/tng/drv/mdfld_dsi_dbi_dsr.o \
+ display/tng/drv/dispmgrnl.o \
+ display/tng/drv/mdfld_dsi_pkg_sender.o \
+ display/tng/drv/mrfld_clock.o \
  display/tng/drv/tng_wa.o \
+ display/tng/drv/jdi_vid.o \
+ display/tng/drv/jdi_cmd.o \
+ display/tng/drv/cmi_vid.o \
+ display/tng/drv/cmi_cmd.o \
+ display/tng/drv/sharp10x19_cmd.o \
+ display/tng/drv/sharp25x16_vid.o \
+ display/tng/drv/sharp25x16_cmd.o \
+ display/tng/drv/sdc16x25_8_cmd.o \
+ display/tng/drv/sdc25x16_cmd.o \
+ display/tng/drv/jdi25x16_vid.o \
+ display/tng/drv/jdi25x16_cmd.o \
  graphics/rgx/services/3rdparty/intel_devfreq/dfrgx_interface.o \
  graphics/rgx/services/3rdparty/intel_devfreq/dfrgx_utilstats.o \
  graphics/rgx/services/3rdparty/intel_devfreq/rgxdf.o \
  graphics/rgx/services/3rdparty/intel_drm/dc_mrfld.o \
- otm_hdmi/ipil/common/ipil_hdcp.o \
- otm_hdmi/ipil/common/otm_ipil_main.o \
- otm_hdmi/ipil/specific/mfld/ips_hdmi.o \
- otm_hdmi/ipil/specific/mrfld/ips_hdcp.o \
- otm_hdmi/ipil/specific/mrfld/ips_hdmi_priv.o \
- otm_hdmi/os/android/android_hdmi.o \
- otm_hdmi/pil/common/edid.o \
- otm_hdmi/pil/common/edid_print.o \
- otm_hdmi/pil/common/hdcp.o \
- otm_hdmi/pil/common/infoframes.o \
- otm_hdmi/pil/common/mode_info.o \
- otm_hdmi/pil/common/otm_hdmi.o \
- otm_hdmi/pil/specific/mofd/ps_hdmi.o \
  video/common/psb_buffer.o \
  video/common/psb_cmdbuf.o \
  video/common/psb_fence.o \
@@ -106,5 +113,22 @@ drm_intel_mid-y += \
  video/vsp/vsp.o \
  video/vsp/vsp_init.o
 
+drm_intel_mid-$(CONFIG_SUPPORT_HDMI) += otm_hdmi/os/android/android_hdmi.o \
+ otm_hdmi/ipil/common/ipil_hdcp.o \
+ otm_hdmi/ipil/common/otm_ipil_main.o \
+ otm_hdmi/ipil/specific/mfld/ips_hdmi.o \
+ otm_hdmi/ipil/specific/mrfld/ips_hdcp.o \
+ otm_hdmi/ipil/specific/mrfld/ips_hdmi_priv.o \
+ otm_hdmi/pil/common/edid.o \
+ otm_hdmi/pil/common/edid_print.o \
+ otm_hdmi/pil/common/hdcp.o \
+ otm_hdmi/pil/common/infoframes.o \
+ otm_hdmi/pil/common/mode_info.o \
+ otm_hdmi/pil/common/otm_hdmi.o \
+ otm_hdmi/pil/specific/mofd/ps_hdmi.o \
+ display/tng/drv/mdfld_hdmi_audio.o \
+ display/tng/drv/psb_intel_hdmi.o \
+
 obj-y += dfrgx/
 obj-y += hdmi_audio/
+

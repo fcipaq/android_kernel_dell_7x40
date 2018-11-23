@@ -17,7 +17,7 @@
 #include <linux/lnw_gpio.h>
 #include <linux/power_supply.h>
 #include <linux/power/max17042_battery.h>
-#include <linux/power/smb347-charger.h>
+#include <linux/power/intel_mdf_battery.h>
 #include <linux/power/bq24192_charger.h>
 #include <linux/power/bq24261_charger.h>
 #include <linux/power/battery_id.h>
@@ -25,8 +25,11 @@
 #include <asm/intel-mid.h>
 #include <asm/delay.h>
 #include <asm/intel_scu_ipc.h>
+#include <linux/acpi.h>
+#include <linux/acpi_gpio.h>
 #include "platform_max17042.h"
 #include "platform_bq24192.h"
+#include <asm/intel_em_config.h>
 
 #define MRFL_SMIP_SRAM_ADDR		0xFFFCE000
 #define MOFD_SMIP_SRAM_ADDR		0xFFFC5C00
@@ -36,12 +39,49 @@
 
 #define MRFL_VOLT_SHUTDOWN_MASK (1 << 1)
 #define MRFL_NFC_RESV_MASK	(1 << 3)
-#define I2C_GPIO_PIN 		21
+
+#define BYT_FFRD8_TEMP_MIN_LIM	0	/* 0degC */
+#define BYT_FFRD8_TEMP_MAX_LIM	55	/* 55degC */
+#define BYT_FFRD8_BATT_MIN_VOLT	3400	/* 3400mV */
+#define BYT_FFRD8_BATT_MAX_VOLT	4350	/* 4350mV */
+
+#define BYT_CRV2_TEMP_MIN_LIM	0	/* 0degC */
+#define BYT_CRV2_TEMP_MAX_LIM	45	/* 45degC */
+#define BYT_CRV2_BATT_MIN_VOLT	3400	/* 3400mV */
+#define BYT_CRV2_BATT_MAX_VOLT	4350	/* 4350mV */
+
+void max17042_i2c_reset_workaround(void)
+{
+/* toggle clock pin of I2C to recover devices from abnormal status.
+ * currently, only max17042 on I2C needs such workaround */
+#if defined(CONFIG_BATTERY_INTEL_MDF)
+#define I2C_GPIO_PIN 27
+#elif defined(CONFIG_BOARD_CTP)
+#define I2C_GPIO_PIN 29
+#elif defined(CONFIG_X86_MRFLD)
+#define I2C_GPIO_PIN 21
+#else
+#define I2C_GPIO_PIN 27
+#endif
+#define I2C0_GPIO_PIN_BYT_CR_V2 79
+
+	int i2c_gpio_pin = I2C_GPIO_PIN;
+
+	lnw_gpio_set_alt(i2c_gpio_pin, LNW_GPIO);
+	gpio_direction_output(i2c_gpio_pin, 0);
+	gpio_set_value(i2c_gpio_pin, 1);
+	udelay(10);
+	gpio_set_value(i2c_gpio_pin, 0);
+	udelay(10);
+	lnw_gpio_set_alt(i2c_gpio_pin, LNW_ALT_1);
+}
+EXPORT_SYMBOL(max17042_i2c_reset_workaround);
+
 
 static bool msic_battery_check(struct max17042_platform_data *pdata)
 {
 	struct sfi_table_simple *sb;
-	char *mrfl_batt_str = "INTN0001";
+//	char *mrfl_batt_str = "INTN0001";
 #ifdef CONFIG_SFI
 	sb = (struct sfi_table_simple *)get_oem0_table();
 #else
@@ -58,16 +98,8 @@ static bool msic_battery_check(struct max17042_platform_data *pdata)
 		 * if pentry is not NULL and header length is greater
 		 * than BATTID length*/
 		if (sb->pentry && sb->header.len >= BATTID_LEN) {
-			if (strncmp((char *)sb->pentry,
-				"PG000001", (BATTID_LEN)) == 0) {
-				snprintf(pdata->battid,
-					(BATTID_LEN + 1),
-					"%s", mrfl_batt_str);
-			} else {
-				snprintf(pdata->battid,
-					(BATTID_LEN + 1),
-					"%s", (char *)sb->pentry);
-			}
+			snprintf(pdata->battid, BATTID_LEN + 1, "%s",
+					(char *)sb->pentry);
 
 			/* First 2 bytes represent the model name
 			 * and the remaining 6 bytes represent the
@@ -223,11 +255,24 @@ static void init_tgain_toff(struct max17042_platform_data *pdata)
 
 static void init_callbacks(struct max17042_platform_data *pdata)
 {
+	/* MRFL Phones and tablets*/
 	pdata->battery_health = mrfl_get_bat_health;
 	pdata->battery_pack_temp = pmic_get_battery_pack_temp;
 	pdata->get_vmin_threshold = mrfl_get_vsys_min;
 	pdata->get_vmax_threshold = mrfl_get_volt_max;
+
+	pdata->reset_i2c_lines = max17042_i2c_reset_workaround;
 }
+
+#if 0
+static bool max17042_is_valid_batid(void)
+{
+	struct em_config_oem0_data data;
+	bool ret = true;
+
+	return ret;
+}
+#endif
 
 static void init_platform_params(struct max17042_platform_data *pdata)
 {
@@ -240,6 +285,7 @@ static void init_platform_params(struct max17042_platform_data *pdata)
 		pdata->soc_intr_mode_enabled = true;
 		pdata->valid_battery = true;
 	}
+
 	pdata->is_init_done = 0;
 }
 
@@ -267,6 +313,13 @@ static void init_platform_thresholds(struct max17042_platform_data *pdata)
 void *max17042_platform_data(void *info)
 {
 	static struct max17042_platform_data platform_data;
+	struct i2c_board_info *i2c_info = (struct i2c_board_info *)info;
+	int intr = get_gpio_by_name("max_fg_alert");
+
+#ifndef CONFIG_ACPI
+	if (i2c_info)
+		i2c_info->irq = intr + INTEL_MID_IRQ_OFFSET;
+#endif
 
 	init_tgain_toff(&platform_data);
 	init_callbacks(&platform_data);

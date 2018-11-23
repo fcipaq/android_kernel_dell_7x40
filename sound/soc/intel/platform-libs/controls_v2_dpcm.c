@@ -417,7 +417,10 @@ static int sst_algo_control_get(struct snd_kcontrol *kcontrol,
 	switch (bc->type) {
 	case SST_ALGO_PARAMS:
 		if (bc->params)
-			memcpy(ucontrol->value.bytes.data, bc->params, bc->max);
+			/* fcipaq: Use integer.value instead of bytes.data since
+				it can hold 1024 bytes. This is bad coding, but it's
+				still working since it is a union... */
+			memcpy(ucontrol->value.integer.value, bc->params, bc->max);
 		break;
 	case SST_ALGO_BYPASS:
 		ucontrol->value.integer.value[0] = bc->bypass ? 1 : 0;
@@ -441,8 +444,12 @@ static int sst_algo_control_set(struct snd_kcontrol *kcontrol,
 	pr_debug("in %s control_name=%s\n", __func__, kcontrol->id.name);
 	switch (bc->type) {
 	case SST_ALGO_PARAMS:
+
 		if (bc->params)
-			memcpy(bc->params, ucontrol->value.bytes.data, bc->max);
+			/* fcipaq: Use integer.value instead of bytes.data since
+				it can hold 1024 bytes. This is bad coding, but it's
+				still working since it is a union... */
+			memcpy(bc->params, ucontrol->value.integer.value, bc->max);
 		break;
 	case SST_ALGO_BYPASS:
 		bc->bypass = !!ucontrol->value.integer.value[0];

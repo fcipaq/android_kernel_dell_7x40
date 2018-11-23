@@ -41,8 +41,11 @@
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 #include <linux/wakelock.h>
+#include <linux/switch.h>
+#include <linux/sysfs.h>
 
 #include <asm/intel_scu_ipc.h>
+#include <linux/gpio.h>
 
 #define DEV_NAME "bq24261_charger"
 #define DEV_MANUFACTURER "TI"
@@ -51,7 +54,7 @@
 
 #define CHRG_TERM_WORKER_DELAY (30 * HZ)
 #define EXCEPTION_MONITOR_DELAY (60 * HZ)
-#define WDT_RESET_DELAY (15 * HZ)
+#define WDT_RESET_DELAY (5 * HZ)
 
 /* BQ24261 registers */
 #define BQ24261_STAT_CTRL0_ADDR		0x00
@@ -94,7 +97,7 @@
 
 #define BQ24261_ICHRG_MASK		(0x1F << 3)
 
-#define BQ24261_ITERM_MASK		(0x03)
+#define BQ24261_ITERM_MASK		(0x07)
 #define BQ24261_MIN_ITERM 50 /* 50 mA */
 #define BQ24261_MAX_ITERM 300 /* 300 mA */
 
@@ -106,6 +109,7 @@
 #define BQ24261_INLMT_500		(0x02 << 4)
 #define BQ24261_INLMT_900		(0x03 << 4)
 #define BQ24261_INLMT_1500		(0x04 << 4)
+#define BQ24261_INLMT_2000		(0x05 << 4)
 #define BQ24261_INLMT_2500		(0x06 << 4)
 
 #define BQ24261_TE_MASK			(0x01 << 2)
@@ -125,6 +129,9 @@
 #define BQ24261_BOOST_ILIM_MASK		(0x01 << 4)
 #define BQ24261_BOOST_ILIM_500ma	(0x0)
 #define BQ24261_BOOST_ILIM_1A		(0x01 << 4)
+#define BQ24261_VINDPM_OFF_MASK		(0x01 << 0)
+#define BQ24261_VINDPM_OFF_5V		(0x0)
+#define BQ24261_VINDPM_OFF_12V		(0x01 << 0)
 
 #define BQ24261_SAFETY_TIMER_MASK	(0x03 << 5)
 #define BQ24261_SAFETY_TIMER_40MIN	0x00
@@ -138,8 +145,8 @@
 #define BQ24261_DEF_BAT_VOLT_MAX_DESIGN		4200000
 
 /* Settings for Voltage / DPPM Register (05) */
-#define BQ24261_VBATT_LEVEL1		3700000
-#define BQ24261_VBATT_LEVEL2		3960000
+#define BQ24261_VBATT_LEVEL1		4000000
+#define BQ24261_VBATT_LEVEL2		4100000
 #define BQ24261_VINDPM_MASK		(0x07)
 #define BQ24261_VINDPM_320MV		(0x01 << 2)
 #define BQ24261_VINDPM_160MV		(0x01 << 1)
@@ -155,6 +162,16 @@
 
 #define BQ24261_MIN_CC			500 /* 500mA */
 #define BQ24261_MAX_CC			3000 /* 3A */
+
+#define OTG_DCDC_EN_GPIO "otg_dcdc_en"
+
+#define MAX_STR_COPY	25
+#define PRECHRG_VBAT_THOLD	3000000
+#define PRECHRG_CC		700
+#define BAT_MONITOR_DELAY (60 * HZ)
+
+/* No of times retry on -EAGAIN or -ETIMEDOUT error */
+#define NR_RETRY_CNT    3
 
 u16 bq24261_sfty_tmr[][2] = {
 	{0, BQ24261_SAFETY_TIMER_DISABLED}
@@ -178,6 +195,8 @@ u16 bq24261_inlmt[][2] = {
 	{900, BQ24261_INLMT_900}
 	,
 	{1500, BQ24261_INLMT_1500}
+	,
+	{2000, BQ24261_INLMT_2000}
 	,
 	{2500, BQ24261_INLMT_2500}
 	,
@@ -233,6 +252,7 @@ struct bq24261_charger {
 	struct delayed_work wdt_work;
 	struct delayed_work low_supply_fault_work;
 	struct delayed_work exception_mon_work;
+	struct delayed_work bat_mon_work;
 	struct notifier_block otg_nb;
 	struct usb_phy *transceiver;
 	struct work_struct otg_work;
@@ -242,6 +262,8 @@ struct bq24261_charger {
 	wait_queue_head_t wait_ready;
 	spinlock_t otg_queue_lock;
 	void __iomem *irq_iomap;
+	struct dentry *bq24261_dbgfs_dir;
+	struct device *dev;
 
 	int chrgr_health;
 	int bat_health;
@@ -264,9 +286,14 @@ struct bq24261_charger {
 	bool is_vsys_on;
 	bool boost_mode;
 	bool is_hw_chrg_term;
+	bool kbd_key_pressed;
+	int kbd_dock_state;
+	int kbd_key;
+
 	char model_name[MODEL_NAME_SIZE];
 	char manufacturer[DEV_MANUFACTURER_NAME_SIZE];
 	struct wake_lock chrgr_en_wakelock;
+	int ext_booster_gpio;
 };
 
 enum bq2426x_model_num {
@@ -285,6 +312,20 @@ static struct bq2426x_model bq24261_model_name[] = {
 	{ "bq24260", BQ24260 },
 	{ "bq24261", BQ24261 },
 };
+
+struct dock_switch_data {
+	struct switch_dev sdev;
+};
+static struct dock_switch_data *sdock;
+
+enum kbd_dock_state {
+	EXTRA_DOCK_STATE_KEYBOARD_KEYPRESS = 1004,
+	EXTRA_DOCK_STATE_KEYBOARD_KEYRELEASE = 1005,
+};
+
+#define  WATCH_DOG_TIMEOUT  6
+#define SPECIAL_KEY  222
+
 
 struct i2c_client *bq24261_client;
 static inline int get_battery_voltage(int *volt);
@@ -309,6 +350,8 @@ enum power_supply_type get_power_supply_type(
 		return POWER_SUPPLY_TYPE_MAINS;
 	case POWER_SUPPLY_CHARGER_TYPE_SE1:
 		return POWER_SUPPLY_TYPE_USB_DCP;
+	case POWER_SUPPLY_CHARGER_TYPE_DOCK:
+		return POWER_SUPPLY_TYPE_DOCK;
 	case POWER_SUPPLY_CHARGER_TYPE_NONE:
 	case POWER_SUPPLY_CHARGER_TYPE_USB_SDP:
 	default:
@@ -326,6 +369,30 @@ static void lookup_regval(u16 tbl[][2], size_t size, u16 in_val, u8 *out_val)
 			break;
 
 	*out_val = (u8) tbl[i - 1][1];
+}
+
+
+
+int bq24261_set_kbd_key(__u16 key)
+{
+        int ret = -EINVAL;
+        struct bq24261_charger *chip = i2c_get_clientdata(bq24261_client);
+
+        if (chip != 0) {
+            chip->kbd_key = ret = (int)key;
+            if (chip->kbd_key_pressed) {
+				chip->kbd_key_pressed = false;
+                dev_info(&bq24261_client->dev, "SPECIAL_KEY_RELEASED\n");
+                chip->kbd_dock_state = EXTRA_DOCK_STATE_KEYBOARD_KEYRELEASE;
+                switch_set_state(&sdock->sdev, chip->kbd_dock_state);
+            } else {
+				chip->kbd_key_pressed = true;
+                dev_info(&bq24261_client->dev, "SPECIAL_KEY_PRESSED\n");
+                chip->kbd_dock_state = EXTRA_DOCK_STATE_KEYBOARD_KEYPRESS;
+                switch_set_state(&sdock->sdev, chip->kbd_dock_state);
+            }
+        }
+        return ret;
 }
 
 void bq24261_cc_to_reg(int cc, u8 *reg_val)
@@ -372,9 +439,16 @@ static inline void bq24261_sfty_tmr_to_reg(int tmr, u8 *regval)
 
 static inline int bq24261_read_reg(struct i2c_client *client, u8 reg)
 {
-	int ret;
+	int ret, i;
 
-	ret = i2c_smbus_read_byte_data(client, reg);
+	for (i = 0; i < NR_RETRY_CNT; i++) {
+		ret = i2c_smbus_read_byte_data(client, reg);
+		if (ret == -EAGAIN || ret == -ETIMEDOUT)
+			continue;
+		else
+			break;
+	}
+
 	if (ret < 0)
 		dev_err(&client->dev, "Error(%d) in reading reg %d\n", ret,
 			reg);
@@ -436,13 +510,22 @@ static inline void bq24261_dump_regs(bool dump_master)
 
 
 #ifdef CONFIG_DEBUG_FS
+struct debugfs_data {
+	u8 debugfs_reg_addr;
+	struct i2c_client *debugfs_bq24261_client;
+};
+
 static int bq24261_reg_show(struct seq_file *seq, void *unused)
 {
 	int val;
-	u8 reg;
+	struct debugfs_data *reg_data;
 
-	reg = *((u8 *)seq->private);
-	val = bq24261_read_reg(bq24261_client, reg);
+	reg_data = (struct debugfs_data *)seq->private;
+
+	dev_dbg(&reg_data->debugfs_bq24261_client->dev, "%s-reg_addr:%d\n",
+			__func__, reg_data->debugfs_reg_addr);
+	val = bq24261_read_reg(reg_data->debugfs_bq24261_client,
+				reg_data->debugfs_reg_addr);
 
 	seq_printf(seq, "0x%02x\n", val);
 	return 0;
@@ -462,9 +545,7 @@ static u32 bq24261_register_set[] = {
 	BQ24261_VINDPM_STAT_ADDR,
 	BQ24261_ST_NTC_MON_ADDR,
 };
-
 static struct dentry *bq24261_dbgfs_dir;
-
 static const struct file_operations bq24261_dbg_fops = {
 	.open = bq24261_dbgfs_open,
 	.read = seq_read,
@@ -478,16 +559,28 @@ static void bq24261_debugfs_init(void)
 	u32 count = ARRAY_SIZE(bq24261_register_set);
 	u32 i;
 	char name[6] = {0};
+	struct debugfs_data *reg_data;
 
 	bq24261_dbgfs_dir = debugfs_create_dir(DEV_NAME, NULL);
 	if (bq24261_dbgfs_dir == NULL)
 		goto debugfs_root_exit;
 
 	for (i = 0; i < count; i++) {
+		reg_data = devm_kzalloc(&bq24261_client->dev,
+					sizeof(*reg_data), GFP_KERNEL);
+		if (!reg_data) {
+			dev_err(&bq24261_client->dev,
+				"mem alloc failed for reg_data %d\n", i);
+			goto debugfs_root_exit;
+		}
+
+		reg_data->debugfs_bq24261_client = bq24261_client;
+
 		snprintf(name, 6, "%02x", bq24261_register_set[i]);
+		reg_data->debugfs_reg_addr = bq24261_register_set[i];
 		fentry = debugfs_create_file(name, S_IRUGO,
 						bq24261_dbgfs_dir,
-						&bq24261_register_set[i],
+						reg_data,
 						&bq24261_dbg_fops);
 		if (fentry == NULL)
 			goto debugfs_err_exit;
@@ -521,6 +614,22 @@ static void bq24261_debugfs_exit(void)
 	return;
 }
 #endif
+
+/*
+ * Sysfs entries to drive gpio and vbus for the keyboard
+ */
+
+static ssize_t drive_kbd_key(struct device *device,
+			struct device_attribute *attr,
+			const char *buf,
+			ssize_t count);
+static ssize_t show_drive_kbd_key(struct device *device,
+                        struct device_attribute *attr,
+                        char *buf);
+
+static DEVICE_ATTR(kbd_key, S_IRUGO | S_IWUSR | S_IWGRP,
+			show_drive_kbd_key, drive_kbd_key);
+
 
 static inline int bq24261_write_reg(struct i2c_client *client, u8 reg, u8 data)
 {
@@ -570,7 +679,7 @@ static inline int bq24261_tmr_ntc_init(struct bq24261_charger *chip)
 static inline int bq24261_enable_charging(
 	struct bq24261_charger *chip, bool val)
 {
-	int ret;
+	int ret, vbat = 0;
 	u8 reg_val;
 	bool is_ready;
 
@@ -623,10 +732,23 @@ static inline int bq24261_enable_charging(
 		return ret;
 
 	bq24261_set_iterm(chip, chip->iterm);
-	ret = bq24261_tmr_ntc_init(chip);
-	if (ret) {
-		dev_err(&chip->client->dev,
-			"Error(%d) in tmr_ntc_init\n", ret);
+
+	/* if the vbat < 3V, do not touch timer register */
+	ret = get_battery_voltage(&vbat);
+	if (ret)
+		dev_err(&chip->client->dev, "Failed to read vbat ");
+
+	if (vbat > PRECHRG_VBAT_THOLD) {
+		ret = bq24261_tmr_ntc_init(chip);
+		if (ret) {
+			dev_err(&chip->client->dev,
+				"Error(%d) in tmr_ntc_init\n", ret);
+		}
+	} else {
+		reg_val=0;
+		bq24261_sfty_tmr_to_reg(360, &reg_val);
+		ret = bq24261_read_modify_reg(chip->client, BQ24261_ST_NTC_MON_ADDR,
+								BQ24261_SAFETY_TIMER_MASK, reg_val);
 	}
 
 	dev_info(&chip->client->dev, "Completed %s=%d\n", __func__, val);
@@ -635,6 +757,40 @@ static inline int bq24261_enable_charging(
 	return ret;
 }
 
+/*
+ * drive_kbd_key - sysfs set api for kbd_key attribute
+ * Parameter as defined by sysfs
+ * Context: can sleep
+ */
+static ssize_t drive_kbd_key(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf,
+				ssize_t count)
+{
+	struct bq24261_charger *chip = i2c_get_clientdata(bq24261_client);
+	dev_dbg(&chip->client->dev, "%s: \n", __func__);
+        /* Placeholder funciton if we need to set the key codes in tthe future */
+	return count;
+}
+
+/*
+ * show_drive_kbd_key - sysfs set api for kbd_key attribute
+ * Parameter as defined by sysfs
+ * Context: can sleep
+ */
+static ssize_t show_drive_kbd_key(struct device *dev,
+                                struct device_attribute *attr,
+                                char *buf)
+{
+	struct bq24261_charger *chip = i2c_get_clientdata(bq24261_client);
+	unsigned long value;
+
+        if (chip == 0)
+            return -EINVAL;
+	value = chip->kbd_key;
+
+	return snprintf(buf, MAX_STR_COPY, "%lu\n", value);
+}
 static inline int bq24261_reset_timer(struct bq24261_charger *chip)
 {
 	return bq24261_read_modify_reg(chip->client, BQ24261_STAT_CTRL0_ADDR,
@@ -666,9 +822,31 @@ static inline int bq24261_enable_charger(
 static inline int bq24261_set_cc(struct bq24261_charger *chip, int cc)
 {
 	u8 reg_val;
-	int ret;
+	int ret, vbat = 0;
 
 	dev_dbg(&chip->client->dev, "%s=%d\n", __func__, cc);
+
+	/* Charging current should be 0.1C if vbat < 3V */
+	ret = get_battery_voltage(&vbat);
+
+	if (ret)
+		dev_err(&chip->client->dev, "Failed to read vbat ");
+
+	if (vbat < PRECHRG_VBAT_THOLD) {
+		cc = PRECHRG_CC;
+		/*
+		 * schedule the worker to bump up the charging current
+		 * expect the battery to cross the pre charge threshold
+		 */
+		schedule_delayed_work(&chip->bat_mon_work, BAT_MONITOR_DELAY);
+	} else {
+		/*
+		 * Send a notification to framework to resume charging with
+		 * higher charging current
+		 */
+		power_supply_changed(&chip->psy_usb);
+	}
+
 	if (chip->pdata->set_cc) {
 		ret = chip->pdata->set_cc(cc);
 		if (unlikely(ret))
@@ -711,9 +889,9 @@ static inline int bq24261_set_cv(struct bq24261_charger *chip, int cv)
 	/*
 	* Setting VINDPM value as per the battery voltage
 	*  VBatt           Vindpm     Register Setting
-	*  < 3.7v           4.2v       0x0 (default)
-	*  3.71v - 3.96v    4.36v      0x2
-	*  > 3.96v          4.6v       0x5
+	*  < 4.0v           4.2v       0x0 (default)
+	*  4.0v - 4.1v      4.36v      0x2
+	*  > 4.1v           4.62v      0x5
 	*/
 	ret = get_battery_voltage(&bat_volt);
 	if (ret) {
@@ -833,13 +1011,23 @@ static inline int bq24261_enable_boost_mode(
 		/* TODO: Support different Host Mode Current limits */
 
 		bq24261_enable_charger(chip, true);
-		ret =
-		    bq24261_read_modify_reg(chip->client,
-					    BQ24261_STAT_CTRL0_ADDR,
-					    BQ24261_BOOST_MASK,
-					    BQ24261_ENABLE_BOOST);
-		if (unlikely(ret))
-			return ret;
+
+		if (unlikely(chip->ext_booster_gpio > 0)) {
+			ret = gpio_direction_output(chip->ext_booster_gpio, 1);
+			if (ret) {
+				dev_err(&chip->client->dev,
+					"%s:OTG GPIO_DCDC_EN write is failed.\n",
+					chip->ext_booster_gpio);
+					return ret;
+			}
+		} else {
+			ret = bq24261_read_modify_reg(chip->client,
+						BQ24261_STAT_CTRL0_ADDR,
+						BQ24261_BOOST_MASK,
+						BQ24261_ENABLE_BOOST);
+			if (unlikely(ret))
+				return ret;
+		}
 
 		ret = bq24261_tmr_ntc_init(chip);
 		if (unlikely(ret))
@@ -853,14 +1041,23 @@ static inline int bq24261_enable_boost_mode(
 		dev_info(&chip->client->dev, "Boost Mode enabled\n");
 	} else {
 
-		ret =
-		    bq24261_read_modify_reg(chip->client,
-					    BQ24261_STAT_CTRL0_ADDR,
-					    BQ24261_BOOST_MASK,
-					    ~BQ24261_ENABLE_BOOST);
+		if (unlikely(chip->ext_booster_gpio > 0)) {
+			ret = gpio_direction_output(chip->ext_booster_gpio, 0);
+			if (ret) {
+				dev_err(&chip->client->dev,
+					"%s:OTG GPIO_DCDC_EN write is failed.\n",
+					chip->ext_booster_gpio);
+					return ret;
+			}
+		} else {
+			ret = bq24261_read_modify_reg(chip->client,
+						BQ24261_STAT_CTRL0_ADDR,
+						BQ24261_BOOST_MASK,
+						~BQ24261_ENABLE_BOOST);
 
-		if (unlikely(ret))
-			return ret;
+			if (unlikely(ret))
+				return ret;
+		}
 		/* if charging need not to be enabled, disable
 		* the charger else keep the charger on
 		*/
@@ -1407,6 +1604,15 @@ static void bq24261_exception_mon_work(struct work_struct *work)
 	}
 }
 
+static void bq24261_bat_mon_work(struct work_struct *work)
+{
+	struct bq24261_charger *chip = container_of(work,
+			struct bq24261_charger,
+			bat_mon_work.work);
+
+	resume_charging(chip);
+}
+
 static int bq24261_handle_irq(struct bq24261_charger *chip, u8 stat_reg)
 {
 	struct i2c_client *client = chip->client;
@@ -1677,6 +1883,60 @@ static enum bq2426x_model_num bq24261_get_model(int bq24261_rev_reg)
 	}
 }
 
+static ssize_t dock_print_name(struct switch_dev *sdev, char *buf)
+{
+	const char *name;
+	const char *name_dock = "dock";
+	const char *name_undock = "undock";
+
+	if (!buf)
+		return -EINVAL;
+
+	switch (switch_get_state(sdev)) {
+	case 0:
+		name = name_undock;
+		break;
+	case 1001:
+		name = name_dock;
+		break;
+	default:
+		name = NULL;
+		break;
+	}
+
+	if (name)
+		return snprintf(buf, MAX_STR_COPY, "%s\n", name);
+	else
+		return -EINVAL;
+}
+
+static ssize_t dock_print_state(struct switch_dev *sdev, char *buf)
+{
+	const char *state;
+	const char *state_dock = "1001";
+	const char *state_undock = "0";
+
+	if (!buf)
+		return -EINVAL;
+
+	switch (switch_get_state(sdev)) {
+	case 0:
+		state = state_undock;
+		break;
+	case 1001:
+		state = state_dock;
+		break;
+	default:
+		state = NULL;
+		break;
+	}
+
+	if (state)
+		return snprintf(buf, MAX_STR_COPY, "%s\n", state);
+	else
+		return -EINVAL;
+}
+
 static int bq24261_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
@@ -1724,7 +1984,13 @@ static int bq24261_probe(struct i2c_client *client,
 
 	init_waitqueue_head(&chip->wait_ready);
 	i2c_set_clientdata(client, chip);
+	chip->client = client;
+	chip->dev = &client->dev;
 	chip->pdata = client->dev.platform_data;
+
+	dev_err(&client->dev, "%s: num_supplicants:%d, name:%s\n", __func__,
+			chip->pdata->num_supplicants,
+			chip->pdata->supplied_to[0]);
 
 	/* Remap IRQ map address to read the IRQ status */
 	if ((chip->pdata->irq_map) && (chip->pdata->irq_mask)) {
@@ -1735,9 +2001,35 @@ static int bq24261_probe(struct i2c_client *client,
 		}
 	}
 
-	chip->client = client;
-	chip->pdata = client->dev.platform_data;
+	/* sysfs for driving key */
+	ret = device_create_file(&chip->client->dev,
+			&dev_attr_kbd_key);
+	if (ret) {
+		dev_err(&chip->client->dev,
+			"Failed to create sysfs: kbd_key\n");
+	}
+	/* Create the dock state for supporting keyboard on EP */
+	sdock = kzalloc(sizeof(struct dock_switch_data),
+						GFP_KERNEL);
+	if (!sdock) {
+		pr_info("%s mem alloc failed\n", __func__);
+		return -ENOMEM;
+	}
 
+
+    sdock->sdev.name = "dock";
+	sdock->sdev.print_name = dock_print_name;
+	sdock->sdev.print_state = dock_print_state;
+	ret = switch_dev_register(&sdock->sdev);
+	if (ret) {
+		pr_info("%s switch registration failed!!\n",
+		__func__);
+	}
+	chip->kbd_dock_state =
+		EXTRA_DOCK_STATE_KEYBOARD_KEYRELEASE;
+
+	/* Send the initial notification about the keyboard state */
+	switch_set_state(&sdock->sdev, chip->kbd_dock_state);
 	chip->psy_usb.name = DEV_NAME;
 	chip->psy_usb.type = POWER_SUPPLY_TYPE_USB;
 	chip->psy_usb.properties = bq24261_usb_props;
@@ -1749,7 +2041,7 @@ static int bq24261_probe(struct i2c_client *client,
 	chip->psy_usb.throttle_states = chip->pdata->throttle_states;
 	chip->psy_usb.num_throttle_states = chip->pdata->num_throttle_states;
 	chip->psy_usb.supported_cables = POWER_SUPPLY_CHARGER_TYPE_USB;
-	chip->max_cc = 1500;
+	chip->max_cc = chip->pdata->max_cc;
 	chip->max_cv = 4350;
 	chip->chrgr_stat = BQ24261_CHRGR_STAT_UNKNOWN;
 	chip->chrgr_health = POWER_SUPPLY_HEALTH_UNKNOWN;
@@ -1811,6 +2103,32 @@ static int bq24261_probe(struct i2c_client *client,
 	power_supply_changed(&chip->psy_usb);
 	bq24261_debugfs_init();
 
+	chip->ext_booster_gpio = get_gpio_by_name(OTG_DCDC_EN_GPIO);
+	if (chip->ext_booster_gpio < 0) {
+		dev_info(&client->dev, "No external OTG voltage booster found,"
+				"gpio(name: %s)\n", OTG_DCDC_EN_GPIO);
+	} else {
+		ret = gpio_request(chip->ext_booster_gpio, "OTG_DCDC_EN_GPIO");
+		if (ret) {
+			dev_err(&client->dev,
+				"%s: Failed to request otg_gpio: error %d\n",
+					__func__, ret);
+			return ret;
+		}
+		ret = gpio_direction_output(chip->ext_booster_gpio, 0);
+		if (ret) {
+			dev_err(&client->dev,
+				"%s: OTG GPIO_DCDC_EN write is failed\n",
+				__func__, chip->ext_booster_gpio);
+			return ret;
+		}
+	}
+
+	/* This worker would monitor the battery voltage*/
+	INIT_DELAYED_WORK(&chip->bat_mon_work,
+					bq24261_bat_mon_work);
+	bq24261_debugfs_init( );
+
 	return 0;
 }
 
@@ -1830,6 +2148,13 @@ static int bq24261_remove(struct i2c_client *client)
 
 	power_supply_unregister(&chip->psy_usb);
 	bq24261_debugfs_exit();
+
+	if (chip->ext_booster_gpio > 0) {
+		gpio_free(chip->ext_booster_gpio);
+	}
+
+	switch_dev_unregister(&sdock->sdev);
+
 	return 0;
 }
 
@@ -1892,6 +2217,20 @@ static const struct i2c_device_id bq24261_id[] = {
 	{},
 };
 
+static void bq24261_shutdown(struct i2c_client *client)
+{
+	int ret;
+
+	dev_info(&client->dev,"%s called\n", __func__);
+
+	ret =  bq24261_read_modify_reg(client, BQ24261_STAT_CTRL0_ADDR,
+                                   BQ24261_TMR_RST_MASK, BQ24261_TMR_RST);
+	if (ret)
+		dev_err(&client->dev, "Error (%d) in WDT reset\n", ret);
+	else
+		dev_info(&client->dev, "WDT reset\n");
+}
+
 MODULE_DEVICE_TABLE(i2c, bq24261_id);
 
 static struct i2c_driver bq24261_driver = {
@@ -1902,6 +2241,7 @@ static struct i2c_driver bq24261_driver = {
 	.probe = bq24261_probe,
 	.remove = bq24261_remove,
 	.id_table = bq24261_id,
+	.shutdown = bq24261_shutdown,
 };
 
 static int __init bq24261_init(void)

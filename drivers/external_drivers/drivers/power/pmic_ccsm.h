@@ -81,12 +81,6 @@
 #define THRMZN4H_ADDR_SC		0xE1
 #define THRMZN4L_ADDR_SC		0xE2
 
-#define THRMZN0_SC_ADCVAL		0x25A1
-#define THRMZN1_SC_ADCVAL		0x3512
-#define THRMZN2_SC_ADCVAL		0x312D
-#define THRMZN3_SC_ADCVAL		0x20FE
-#define THRMZN4_SC_ADCVAL		0x10B8
-
 #define CHGRIRQ0_ADDR			0x07
 #define CHGIRQ0_BZIRQ_MASK		D7
 #define CHGIRQ0_BAT_CRIT_MASK		D6
@@ -133,6 +127,22 @@
 #define SCHRGRIRQ1_SVBUSDET_MASK	D0
 #define SHRT_GND_DET			(0x01 << 3)
 #define SHRT_FLT_DET			(0x01 << 4)
+#define SHRT_MID_DET			0
+
+#define GPIO3CTLO_ADDR			0x81
+#define GPIO3CTLO_DIR3_OUTPUT		D5
+#define GPIO3CTLO_DRV3_PSHPLL		D4
+#define GPIO3CTLO_REN3_PULL_EN		D3
+#define GPIO3CTLO_DOUT3_HIGH		D0
+
+#define GPIO6CTLO_ADDR			0x84
+#define GPIO6CTLO_DIR6_OUTPUT		D5
+#define GPIO6CTLO_DRV6_PSHPLL		D4
+#define GPIO6CTLO_REN6_PULL_EN		D3
+#define GPIO6CTLO_DOUT6_HIGH		D0
+
+#define GPIO3CTLI_ADDR			0x91
+#define GPIO3CTLI_DIN3_HIGH_MASK	D0
 
 #define PMIC_CHRGR_INT0_MASK		0xB1
 #define PMIC_CHRGR_CCSM_INT0_MASK	0xB0
@@ -213,9 +223,30 @@
 #define USBSRCDET_SUSBHWDET_DETSUCC	(0x01 << 1)
 #define USBSRCDET_SUSBHWDET_DETFAIL	(0x03 << 0)
 
-/* Register on I2C-dev2-0x6E */
+#define USBPHYCTRL_ADDR			0x30
+#define USBPHYCTRL_CHGDET_N_POL_MASK	D1
+#define USBPHYCTRL_USBPHYRSTB_MASK	D0
+
+/* Registers on I2C-dev2-0x6E */
 #define USBPATH_ADDR		0x011C
 #define USBPATH_USBSEL_MASK	D3
+
+#define HVDCPDET_SLEEP_TIME		2000
+
+#define DBG_USBBC1_ADDR			0x01B7
+#define DBG_USBBC1_SWCTRL_EN_MASK	D7
+#define DBG_USBBC1_EN_CMP_DM_MASK	D2
+#define DBG_USBBC1_EN_CMP_DP_MASK	D1
+#define DBG_USBBC1_EN_CHG_DET_MASK	D0
+
+#define DBG_USBBC2_ADDR			0x01B8
+#define DBG_USBBC2_EN_VDMSRC_MASK	D1
+#define DBG_USBBC2_EN_VDPSRC_MASK	D0
+
+#define DBG_USBBCSTAT_ADDR		0x01B9
+#define DBG_USBBCSTAT_VDATDET_MASK	D2
+#define DBG_USBBCSTAT_CMP_DM_MASK	D1
+#define DBG_USBBCSTAT_CMP_DP_MASK	D0
 
 #define TT_I2CDADDR_ADDR		0x00
 #define TT_CHGRINIT0OS_ADDR		0x01
@@ -353,7 +384,9 @@ struct pmic_chrgr_drv_context {
 	enum pmic_charger_cable_type charger_type;
 	/* ShadyCove-WA for VBUS removal detect issue */
 	bool vbus_connect_status;
+	bool vdcin_connect_status;
 	bool otg_mode_enabled;
+	bool aca_det_done;
 	struct ps_batt_chg_prof *sfi_bcprof;
 	struct ps_pse_mod_prof *actual_bcprof;
 	struct ps_pse_mod_prof *runtime_bcprof;
@@ -361,7 +394,6 @@ struct pmic_chrgr_drv_context {
 	struct usb_phy *otg;
 	struct list_head evt_queue;
 	struct work_struct evt_work;
-	struct delayed_work acok_irq_work;
 	struct mutex evt_queue_lock;
 	struct wake_lock wakelock;
 	struct wake_lock otg_wa_wakelock;

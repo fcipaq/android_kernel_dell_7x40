@@ -130,6 +130,8 @@ struct devs_id __initconst device_ids[] = {
 	{"syn_3400_cgs", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
 	{"syn_3400_igzo", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
 	{"synaptics_3402", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
+	{"synaptics_7508", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
+	{"synaptics_7501", SFI_DEV_TYPE_I2C, 0, &rmi4_platform_data, NULL},
 
 	/* I2C devices*/
 	{"max17042", SFI_DEV_TYPE_I2C, 1, &max17042_platform_data, NULL},
@@ -137,11 +139,19 @@ struct devs_id __initconst device_ids[] = {
 	{"max17050", SFI_DEV_TYPE_I2C, 1, &max17042_platform_data, NULL},
 	{"bq24192", SFI_DEV_TYPE_I2C, 1, &bq24192_platform_data},
 	{"bq24261_charger", SFI_DEV_TYPE_I2C, 1, &bq24261_platform_data, NULL},
+#ifdef CONFIG_BQ24261_CHARGER_EP
+	/* fcipaq */
+	/* enable EXPERIMENTAL support for EP keyboard */
+	{"bq24261_ep", SFI_DEV_TYPE_I2C, 1, &no_platform_data, NULL},
+//	{"bq24261_ep", SFI_DEV_TYPE_I2C, 1, &bq24261_platform_data, NULL},
+//	{"max17050_ep", SFI_DEV_TYPE_I2C, 1, &max17042_platform_data, NULL},
+#endif
 	{"pn544", SFI_DEV_TYPE_I2C, 0, &pn544_platform_data, NULL},
 	{"MNZX8000", SFI_DEV_TYPE_I2C, 0, &no_platform_data, NULL},
 	{"pca953x", SFI_DEV_TYPE_I2C, 0, &nxp_pca9574_platform_data, NULL},
 	{"it8566_hdmi_cec", SFI_DEV_TYPE_I2C, 1, &no_platform_data, NULL},
 	{"it8566_flash_mod", SFI_DEV_TYPE_I2C, 1, &no_platform_data, NULL},
+	{"wm8958", SFI_DEV_TYPE_I2C, 0, &wm8994_platform_data, NULL},
 
 	/* MSIC subdevices */
 	{"msic_adc", SFI_DEV_TYPE_IPC, 1, &msic_adc_platform_data,
@@ -213,9 +223,9 @@ struct devs_id __initconst device_ids[] = {
 						&ipc_device_handler},
 	{"mrfld_wm8958", SFI_DEV_TYPE_IPC, 1, &merfld_wm8958_audio_platform_data,
 						&ipc_device_handler},
+
 	{"soc_thrm", SFI_DEV_TYPE_IPC, 1, &no_platform_data,
 						&soc_thrm_device_handler},
-	{"wm8958", SFI_DEV_TYPE_I2C, 0, &wm8994_platform_data, NULL},
 	{"lm49453_codec", SFI_DEV_TYPE_I2C, 1, &no_platform_data, NULL},
 	/* USB */
 	{"ULPICAL_7F", SFI_DEV_TYPE_USB, 0, &no_platform_data,

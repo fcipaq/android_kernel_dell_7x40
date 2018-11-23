@@ -70,6 +70,8 @@
 #define PID_S3202_OGS "TM2178"
 #define PID_S3408 "s3408_ver5"
 #define PID_S3402 "s3402"
+#define PID_S7508 "s7508"
+#define PID_S7501 "s7501"
 
 /** Image file V5, Option 0
  */
@@ -724,7 +726,7 @@ print_image_info(struct i2c_client *client, struct image_header *header,
 			header->product_id);
 	dev_info(&client->dev, "Img product info:       %#04x %#04x\n",
 			header->product_info[0], header->product_info[1]);
-	dev_info(&client->dev, "Got firmware, size: %zd.\n", fw_entry->size);
+	dev_info(&client->dev, "Got firmware, size: %d.\n", fw_entry->size);
 }
 
 int rmi4_fw_update(struct rmi4_data *pdata,
@@ -749,6 +751,7 @@ int rmi4_fw_update(struct rmi4_data *pdata,
 	const struct rmi4_touch_calib *calib = pdata->board->calib;
 	const struct rmi4_platform_data *platformdata =
 		client->dev.platform_data;
+	u8 intr_status;
 
 	dev_info(&client->dev, "Enter %s.\n", __func__);
 #ifdef	DEBUG
@@ -784,7 +787,11 @@ int rmi4_fw_update(struct rmi4_data *pdata,
 			touch_type = RMI4_S3400_CGS;
 		else
 			touch_type = RMI4_S3400_IGZO;
-	} else {
+	} else if (strcmp(data.product_id, PID_S7508) == 0)
+		touch_type = RMI4_S7508;
+	else if (strcmp(data.product_id, PID_S7501) == 0)
+		touch_type = RMI4_S7501;
+	else {
 		dev_err(&client->dev, "Unsupported touch screen type, product ID: %s\n",
 				data.product_id);
 		if (!force) {
@@ -828,6 +835,16 @@ int rmi4_fw_update(struct rmi4_data *pdata,
 	if (header.config_size)
 		data.config_data = fw_entry->data + F34_FW_IMAGE_OFFSET +
 			header.image_size;
+
+	/* Clear interrupts */
+	retval = rmi4_i2c_block_read(data.rmi4_dev,
+		data.f01_pdt->data_base_addr + 1,
+		&intr_status,
+		1);
+	if (retval < 0) {
+		dev_err(&client->dev, "Unable to read & clear interrupts\n",
+			pdata->irq);
+	}
 
 	retval = request_threaded_irq(pdata->irq, NULL,
 		f34_irq_thread,

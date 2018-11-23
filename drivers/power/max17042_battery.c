@@ -264,7 +264,6 @@ enum max170xx_chip_type {MAX17042, MAX17050};
 #define VBATT_MAX_OFFSET	50 /* 50mV from VMAX */
 #define VALERT_VOLT_OFFSET	20 /* each bit corresponds to 20mV */
 
-#if 0
 /* default fuel gauge cell data for debug purpose only */
 static uint16_t cell_char_tbl[] = {
 	/* Data to be written from 0x80h */
@@ -277,7 +276,6 @@ static uint16_t cell_char_tbl[] = {
 	0x0100, 0x0100, 0x0100, 0x0100, 0x0100, 0x0100, 0x0100, 0x0100,
 	0x0100, 0x0100, 0x0100, 0x0100, 0x0100, 0x0100, 0x0100, 0x0100,
 };
-#endif
 
 struct max17042_chip {
 	struct i2c_client *client;
@@ -2121,11 +2119,16 @@ static int max17042_probe(struct i2c_client *client,
 	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
 	struct max17042_chip *chip;
 	int ret, i;
+#ifdef CONFIG_ACPI
+    int gpio;
+	struct acpi_gpio_info gpio_info;
+#endif
+
+#ifdef CONFIG_XEN
+	return -ENODEV;
+#endif
 
 #ifdef CONFIG_ACPI
-	int gpio;
-	struct acpi_gpio_info gpio_info;
-
 	client->dev.platform_data = max17042_platform_data(NULL);
 	gpio = acpi_get_gpio_by_index(&client->dev, 0, &gpio_info);
 	client->irq = gpio_to_irq(gpio);

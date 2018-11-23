@@ -15,7 +15,6 @@
 
 #include <linux/workqueue.h>
 #include <linux/leds.h>
-#include <linux/types.h>
 
 struct device;
 
@@ -166,8 +165,6 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_USB_HC,
 	POWER_SUPPLY_PROP_USB_OTG,
 	POWER_SUPPLY_PROP_CHARGE_ENABLED,
-	/* Local extensions of type int64_t */
-	POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT,
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_PROP_MODEL_NAME,
 	POWER_SUPPLY_PROP_MANUFACTURER,
@@ -184,7 +181,9 @@ enum power_supply_type {
 	POWER_SUPPLY_TYPE_USB_DCP,	/* Dedicated Charging Port */
 	POWER_SUPPLY_TYPE_USB_CDP,	/* Charging Downstream Port */
 	POWER_SUPPLY_TYPE_USB_ACA,	/* Accessory Charger Adapters */
+	POWER_SUPPLY_TYPE_DOCK,		/* To Support DOCK Charger*/
 	POWER_SUPPLY_TYPE_USB_HOST,	/* To support OTG devices */
+
 };
 
 enum power_supply_charger_event {
@@ -215,6 +214,7 @@ enum power_supply_charger_cable_type {
 	POWER_SUPPLY_CHARGER_TYPE_SE1 = 1 << 9,
 	POWER_SUPPLY_CHARGER_TYPE_MHL = 1 << 10,
 	POWER_SUPPLY_CHARGER_TYPE_B_DEVICE = 1 << 11,
+	POWER_SUPPLY_CHARGER_TYPE_DOCK = 1 << 12,
 };
 
 struct power_supply_cable_props {
@@ -229,12 +229,12 @@ struct power_supply_cable_props {
 	POWER_SUPPLY_CHARGER_TYPE_USB_CDP | \
 	POWER_SUPPLY_CHARGER_TYPE_USB_ACA | \
 	POWER_SUPPLY_CHARGER_TYPE_ACA_DOCK| \
-	POWER_SUPPLY_CHARGER_TYPE_SE1)
+	POWER_SUPPLY_CHARGER_TYPE_SE1 | \
+	POWER_SUPPLY_CHARGER_TYPE_DOCK)
 
 union power_supply_propval {
 	int intval;
 	const char *strval;
-	int64_t int64val;
 };
 
 enum power_supply_notifier_events {

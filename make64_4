@@ -1,0 +1,8 @@
+#export PATH="$PATH:$HOME/android/x86_64-linux-android-4.8/bin"
+export PATH="$PATH:$HOME/devel/x86_64-linux-android-4.8/bin"
+export CROSS_COMPILE="x86_64-linux-android-"
+export ARCH=x86
+./col_make -j4 O=out64
+cd mkboot
+./gnu_makeboot64.sh
+cd ..

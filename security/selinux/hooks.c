@@ -102,13 +102,13 @@ extern struct security_operations *security_ops;
 static atomic_t selinux_secmark_refcount = ATOMIC_INIT(0);
 
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
-int selinux_enforcing;
+int selinux_enforcing = 0;
 
 static int __init enforcing_setup(char *str)
 {
 	unsigned long enforcing;
 	if (!strict_strtoul(str, 0, &enforcing))
-		selinux_enforcing = enforcing ? 1 : 0;
+		selinux_enforcing = 0;
 	return 1;
 }
 __setup("enforcing=", enforcing_setup);
@@ -2756,7 +2756,7 @@ static noinline int audit_inode_permission(struct inode *inode,
 	ad.u.inode = inode;
 
 	rc = slow_avc_audit(current_sid(), isec->sid, isec->sclass, perms,
-			    audited, denied, result, &ad, flags);
+			    audited, 0, result, &ad, flags);
 	if (rc)
 		return rc;
 	return 0;
@@ -2795,10 +2795,11 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 	audited = avc_audit_required(perms, &avd, rc,
 				     from_access ? FILE__AUDIT_ACCESS : 0,
 				     &denied);
+
 	if (likely(!audited))
 		return rc;
 
-	rc2 = audit_inode_permission(inode, perms, audited, denied, rc, flags);
+	rc2 = audit_inode_permission(inode, perms, audited, 0, rc, flags);
 	if (rc2)
 		return rc2;
 	return rc;

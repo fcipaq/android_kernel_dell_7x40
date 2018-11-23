@@ -41,7 +41,10 @@
 
 #ifdef CONFIG_SUPPORT_MIPI
 #include "mdfld_dsi_dbi_dsr.h"
+#include "mdfld_dsi_dbi.h"
+#ifdef CONFIG_MID_DSI_DPU
 #include "mdfld_dsi_dbi_dpu.h"
+#endif
 #include "mdfld_dsi_pkg_sender.h"
 #endif
 
@@ -511,14 +514,20 @@ static void mid_pipe_event_handler(struct drm_device *dev, uint32_t pipe)
 		for (i = 0; i < 256; i++)
 			REG_WRITE(regs->palette_reg + i*4, gamma_setting_save[i] );
 
+		REG_WRITE(regs->gamma_red_max_reg, ctx->gamma_red_max);
+		REG_WRITE(regs->gamma_green_max_reg, ctx->gamma_green_max);
+		REG_WRITE(regs->gamma_blue_max_reg, ctx->gamma_blue_max);
+
 		val = REG_READ(regs->pipeconf_reg);
 		val |= (PIPEACONF_GAMMA);
 		REG_WRITE(regs->pipeconf_reg, val);
 		ctx->pipeconf = val;
+/*
 		REG_WRITE(regs->dspcntr_reg, REG_READ(regs->dspcntr_reg) |
 				DISPPLANE_GAMMA_ENABLE);
 		ctx->dspcntr = REG_READ(regs->dspcntr_reg) | DISPPLANE_GAMMA_ENABLE;
 		REG_READ(regs->dspcntr_reg);
+*/
 		drm_psb_set_gamma_pending = 0 ;
 		drm_psb_set_gamma_pipe = MDFLD_PIPE_MAX;
 	}

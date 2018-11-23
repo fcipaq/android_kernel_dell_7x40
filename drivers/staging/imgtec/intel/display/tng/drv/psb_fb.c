@@ -12,7 +12,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
+ * this program; if not, write to the Free Software Foundation, Inc., 
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  *
  **************************************************************************/
@@ -40,23 +40,14 @@
 #include "psb_fb.h"
 #include "pvrsrv_interface.h"
 
-#ifdef CONFIG_SUPPORT_MIPI
 #include "mdfld_dsi_dbi.h"
 #include "mdfld_dsi_output.h"
-#endif
 #include "mdfld_output.h"
-
-#include <linux/compat.h>
-
-#include "android_hdmi.h"
 
 static void psb_user_framebuffer_destroy(struct drm_framebuffer *fb);
 static int psb_user_framebuffer_create_handle(struct drm_framebuffer *fb,
-					struct drm_file *file_priv,
-					unsigned int *handle);
-
-static int psbfb_set_recovery_mode_hdmi(struct fb_info *info,
-					struct psb_fbdev *fbdev);
+					      struct drm_file *file_priv,
+					      unsigned int *handle);
 
 static const struct drm_framebuffer_funcs psb_fb_funcs = {
 	.destroy = psb_user_framebuffer_destroy,
@@ -309,33 +300,6 @@ static int fb_blank_void(int blank_mode, struct fb_info *info)
 	return 0;
 }
 
-#define FB_MIN_WIDTH            1280
-#define FBIO_PSB_SET_RGBX	_IOWR('F', 0x42, struct fb_var_screeninfo)
-#define FBIO_PSB_SET_RMODE      _IOWR('F', 0x43, struct fb_var_screeninfo)
-
-static int psb_fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg)
-{
-	struct psb_fbdev *fbdev = info->par;
-	struct psb_framebuffer *psbfb = fbdev->pfb;
-	struct drm_device *dev = psbfb->base.dev;
-	int ret = 0;
-
-	switch(cmd) {
-		case FBIO_PSB_SET_RGBX:
-			REG_WRITE(DSPBCNTR, REG_READ(DSPBCNTR)|0xb8000000);
-			REG_WRITE(DSPBSURF, REG_READ(DSPBSURF));
-			break;
-		case FBIO_PSB_SET_RMODE:
-			/* set recovery mode if below 1280 */
-			ret = psbfb_set_recovery_mode_hdmi(info, fbdev);
-			break;
-		default:
-			return -ENOTTY;
-	}
-
-	return ret;
-}
-
 static struct fb_ops psbfb_ops = {
 	.owner = THIS_MODULE,
 	.fb_check_var = drm_fb_helper_check_var,
@@ -346,10 +310,6 @@ static struct fb_ops psbfb_ops = {
 	.fb_copyarea = cfb_copyarea,
 	.fb_imageblit = cfb_imageblit,
 	.fb_mmap = psbfb_mmap,
-	.fb_ioctl = psb_fb_ioctl,
-#ifdef CONFIG_COMPAT
-	.fb_compat_ioctl = psb_fb_ioctl,
-#endif
 };
 
 static struct drm_framebuffer *psb_framebuffer_create(struct drm_device *dev,
@@ -418,8 +378,7 @@ static struct drm_framebuffer *psb_user_framebuffer_create(
 	/* map GTT */
 	ret = psb_gtt_map_vaddr(dev, user_virtual_addr, size, 0, &page_offset);
 	if (ret) {
-		DRM_ERROR("Can not map cpu address (%x) to GTT handle\n",
-			  user_virtual_addr);
+		DRM_ERROR("Can not map cpu address (%p) to GTT handle \n", user_virtual_addr);
 		psbfb->offset = 0;
 	} else
 		psbfb->offset =  page_offset << PAGE_SHIFT;
@@ -428,7 +387,6 @@ static struct drm_framebuffer *psb_user_framebuffer_create(
 	if (!info)
 		return ERR_PTR(-ENOMEM);
 
-	info->par = fbdev;
 	info->screen_base = pg->vram_addr;
 
 	strcpy(info->fix.id, "psbfb");
@@ -465,63 +423,6 @@ static struct drm_framebuffer *psb_user_framebuffer_create(
 	return fb;
 }
 
-static int psbfb_set_recovery_mode_hdmi(struct fb_info *info, struct psb_fbdev *fbdev)
-{
-	struct drm_device *dev = fbdev->psb_fb_helper.dev;
-	struct drm_psb_private *dev_priv =
-		(struct drm_psb_private *)dev->dev_private;
-	int ret = 0;
-	int i;
-	struct drm_fb_helper *psb_fb_helper = (struct drm_fb_helper *)fbdev;
-	struct drm_fb_helper_crtc *fb_crtc;
-	struct drm_display_mode *desired_mode = NULL;
-	struct drm_crtc *crtc;
-	struct fb_var_screeninfo var;
-
-	crtc = dev_priv->pipe_to_crtc_mapping[1];
-	for (i = 0; i < psb_fb_helper->crtc_count; i++) {
-		fb_crtc = &psb_fb_helper->crtc_info[i];
-		if (fb_crtc != NULL ) {
-			desired_mode = psb_fb_helper->crtc_info[i].desired_mode;
-			if (desired_mode) {
-				DRM_ERROR("crtc %d, width %d, heigth %d\n",
-					i, desired_mode->hdisplay, desired_mode->vdisplay);
-				ret = 0; /* prev loop iteration could have changed */
-				break;
-			} else {
-				DRM_ERROR("crtc %d, no desired mode\n", i);
-				ret = -ENODEV;
-			}
-		} else {
-			DRM_ERROR("crtc - no modes\n");
-			ret = -ENODEV;
-		}
-	}
-
-	if (ret != 0 )
-		return ret;
-
-	if (desired_mode && desired_mode->hdisplay >= FB_MIN_WIDTH)
-		return ret;
-
-	if (desired_mode ) {
-		memcpy(&var, &info->var, sizeof(struct fb_var_screeninfo));
-		var.xres = desired_mode->hdisplay;
-		var.yres = desired_mode->vdisplay;
-		fb_set_var(info, &var);
-		info->fix.line_length = ALIGN(var.xres * (var.bits_per_pixel / 8), 64);
-		info->screen_size = ALIGN(var.yres * info->fix.line_length, PAGE_SIZE);
-		info->fix.smem_len = info->screen_size;
-		REG_WRITE(DSPBSTRIDE, info->fix.line_length);
-		ret = 0;
-	}
-	else
-		ret = -ENOTTY;
-
-	return ret;
-}
-
-
 static int psbfb_create(struct psb_fbdev *fbdev,
 			struct drm_fb_helper_surface_size *sizes)
 {
@@ -536,15 +437,12 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 	struct device *device = &dev->pdev->dev;
 	int size;
 	int ret;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct mdfld_dsi_encoder *dsi_encoder =
 		MDFLD_DSI_ENCODER_WITH_DRM_ENABLE(dev_priv->encoder0);
 	struct mdfld_dsi_config *dsi_config =
 		mdfld_dsi_encoder_get_config(dsi_encoder);
 	struct drm_display_mode *fixed_mode;
-#endif
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (!dsi_config) {
 		DRM_ERROR("Failed to get encoder config\n");
 		return -EINVAL;
@@ -563,13 +461,6 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 	else
 		mode_cmd.width = fixed_mode->hdisplay;
 	mode_cmd.height = fixed_mode->vdisplay;
-#else
-	mode_cmd.width = PSB_DEFAULT_HDMI_FB_WIDTH;
-	mode_cmd.height = PSB_DEFAULT_HDMI_FB_HEIGHT;
-	DRM_INFO("sizes fb [%d, %d], surface [%d %d]\n",
-				sizes->fb_width, sizes->fb_height,
-				sizes->surface_width, sizes->surface_height);
-#endif
 
 	mode_cmd.pitches[0] = mode_cmd.width * (sizes->surface_bpp >> 3);
 
@@ -627,17 +518,12 @@ static int psbfb_create(struct psb_fbdev *fbdev,
 
 	drm_fb_helper_fill_fix(info, fb->pitches[0], fb->depth);
 
-#ifdef CONFIG_SUPPORT_MIPI
 	if (get_panel_type(dev, 0) == TMD_6X10_VID)
 		drm_fb_helper_fill_var(info, &fbdev->psb_fb_helper,
 				       fixed_mode->hdisplay - 200, fixed_mode->vdisplay);
 	else
 		drm_fb_helper_fill_var(info, &fbdev->psb_fb_helper,
 				       fixed_mode->hdisplay, fixed_mode->vdisplay);
-#else
-		drm_fb_helper_fill_var(info, &fbdev->psb_fb_helper,
-				       mode_cmd.width, mode_cmd.height);
-#endif
 
 	info->fix.mmio_start = pci_resource_start(dev->pdev, 0);
 	info->fix.mmio_len = pci_resource_len(dev->pdev, 0);
@@ -725,7 +611,6 @@ int psb_fbdev_destroy(struct drm_device *dev, struct psb_fbdev *fbdev)
 	if (fbdev->psb_fb_helper.fbdev) {
 		info = fbdev->psb_fb_helper.fbdev;
 		unregister_framebuffer(info);
-		memset(info->screen_base, 0x0, info->screen_size);
 		iounmap(info->screen_base);
 		framebuffer_release(info);
 	}

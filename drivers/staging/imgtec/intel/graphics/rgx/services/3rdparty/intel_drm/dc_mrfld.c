@@ -84,25 +84,12 @@ static uint32_t DC_MRFLD_PixelFormat_Mapping[] = {
 };
 #endif
 
-#ifdef CONFIG_SUPPORT_MIPI
 static uint32_t DC_ExtraPowerIslands[DC_PLANE_MAX][MAX_PLANE_INDEX] = {
 	{ 0,              0,              0},
-#ifdef CONFIG_MOOREFIELD
 	{ 0,              0,              0},
-#else
-	{ OSPM_DISPLAY_C, 0,              0},
-#endif
 	{ 0,              OSPM_DISPLAY_C, 0},
 	{ 0,              0,              0},
 };
-#else
-static uint32_t DC_ExtraPowerIslands[DC_PLANE_MAX][MAX_PLANE_INDEX] = {
-	{ 0,              0,              0},
-	{ OSPM_DISPLAY_A, 0,              0},
-	{ OSPM_DISPLAY_A, OSPM_DISPLAY_C, 0},
-	{ 0,              0,              0},
-};
-#endif
 
 static inline IMG_UINT32 _Align_To(IMG_UINT32 ulValue,
 				IMG_UINT32 ulAlignment)
@@ -716,7 +703,7 @@ static IMG_BOOL _Do_Flip(DC_MRFLD_FLIP *psFlip, int iPipe)
 
 #ifndef ENABLE_HW_REPEAT_FRAME
 	/* maxfifo is only enabled in mipi only mode */
-	if (iPipe == DC_PIPE_A && !hdmi_state)
+	if (iPipe == DC_PIPE_A)
 		maxfifo_timer_start(gpsDevice->psDrmDevice);
 #endif
 err_out:
@@ -952,8 +939,7 @@ static void _Dispatch_Flip(DC_MRFLD_FLIP *psFlip)
 		psFlip = NULL;
 	}
 
-#ifdef CONFIG_SUPPORT_MIPI
-	if (send_wms) {
+	if (send_wms && psFlip) {
 
 		/* Ensure that *psFlip is not freed while lock is not held. */
 		if (psFlip)
@@ -972,11 +958,10 @@ static void _Dispatch_Flip(DC_MRFLD_FLIP *psFlip)
 
 		/* Issue "write_mem_start" for command mode panel. */
 		DCCBUpdateDbiPanel(gpsDevice->psDrmDevice, DC_PIPE_A);
-		if (psFlip)
+	if (psFlip)
 			psFlip->uiVblankCounters[DC_PIPE_A] =
 				drm_vblank_count(gpsDevice->psDrmDevice, DC_PIPE_A);
 	}
-#endif
 
 	mutex_unlock(&gpsDevice->sFlipQueueLock);
 }
@@ -1802,8 +1787,11 @@ static PVRSRV_ERROR DC_MRFLD_init(struct drm_device *psDrmDev)
 	DC_MRFLD_DEVICE *psDevice;
 	int i, j;
 
-	if (!psDrmDev)
+	if (!psDrmDev) {    
+		DRM_ERROR("DC_MRFLD_init: Invalid params.\n");
 		return PVRSRV_ERROR_INVALID_PARAMS;
+	}
+
 
 	/*create new display device*/
 	psDevice = kzalloc(sizeof(DC_MRFLD_DEVICE), GFP_KERNEL);
@@ -1890,8 +1878,10 @@ static PVRSRV_ERROR DC_MRFLD_init(struct drm_device *psDrmDev)
 
 	return PVRSRV_OK;
 reg_error:
+	DRM_ERROR("DC_MRFLD_init: reg error.\n");
 	_SystemBuffer_Deinit(psDevice);
 init_error:
+	DRM_ERROR("DC_MRFLD_init: Init error.\n");
 	kfree(psDevice);
 	return eRes;
 }

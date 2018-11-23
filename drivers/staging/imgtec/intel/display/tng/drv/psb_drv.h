@@ -412,6 +412,13 @@ typedef enum {
 	MDFLD_PIPE_MAX,
 } mdfld_pipe_num;
 
+struct pixel_shift {
+        int max_x;
+        int max_y;
+        int curr_x;     // update on x pixel shift
+        int curr_y;     // update on y pixel shift
+};
+
 struct drm_psb_private {
 	/*
 	 * DSI info.
@@ -1111,6 +1118,7 @@ struct drm_psb_private {
 	bool bUseHFPLL;
 	bool bRereadZero;
 	bool panel_180_rotation;
+	struct pixel_shift amoled_shift;
 };
 
 struct psb_mmu_driver;

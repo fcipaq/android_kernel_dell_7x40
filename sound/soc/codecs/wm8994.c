@@ -213,7 +213,7 @@ static int configure_aif_clock(struct snd_soc_codec *codec, int aif)
 static int configure_clock(struct snd_soc_codec *codec)
 {
 	struct wm8994_priv *wm8994 = snd_soc_codec_get_drvdata(codec);
-	int change, new;
+	int change, new = 0;
 
 	/* Bring up the AIF clocks first */
 	configure_aif_clock(codec, 0);
@@ -231,10 +231,12 @@ static int configure_clock(struct snd_soc_codec *codec)
 		return 0;
 	}
 
+#if 0
 	if (wm8994->aifclk[0] < wm8994->aifclk[1])
 		new = WM8994_SYSCLK_SRC;
 	else
 		new = 0;
+#endif
 
 	change = snd_soc_update_bits(codec, WM8994_CLOCKING_1,
 				     WM8994_SYSCLK_SRC, new);
@@ -1152,6 +1154,7 @@ static int aif2clk_ev(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
+		pr_debug("%s: SND_SOC_DAPM_PRE_PMU\n", __func__);
 		val = snd_soc_read(codec, WM8994_AIF2_CONTROL_1);
 		if ((val & WM8994_AIF2ADCL_SRC) &&
 		    (val & WM8994_AIF2ADCR_SRC))
@@ -1197,6 +1200,7 @@ static int aif2clk_ev(struct snd_soc_dapm_widget *w,
 		break;
 
 	case SND_SOC_DAPM_POST_PMU:
+		pr_debug("%s: SND_SOC_DAPM_POST_PMU\n", __func__);
 		for (i = 0; i < ARRAY_SIZE(wm8994_vu_bits); i++)
 			snd_soc_write(codec, wm8994_vu_bits[i].reg,
 				      snd_soc_read(codec,
@@ -2805,6 +2809,7 @@ static int wm8994_hw_params(struct snd_pcm_substream *substream,
 	int rate_val = 0;
 	int id = dai->id - 1;
 	struct snd_pcm_hw_params hw_params;
+	snd_pcm_format_t sample_format = -1;
 
 	int i, cur_val, best_val, bclk_rate, best;
 
@@ -2871,7 +2876,16 @@ static int wm8994_hw_params(struct snd_pcm_substream *substream,
 
 	bclk_rate = params_rate(&hw_params);
 
-	switch (params_format(&hw_params)) {
+	sample_format = params_format(&hw_params);
+	dev_dbg(codec->dev, "%s: params_format(&hw_params)=%x", __func__ , sample_format);
+
+	/* HACK: Set 32-bit sample width for AIF2 */
+	if (dai->id == 2) {
+		dev_dbg(codec->dev, "HACK: Overriding pcm format for AIF2!");
+		sample_format = SNDRV_PCM_FORMAT_S32_LE;
+	}
+
+	switch (sample_format) {
 	case SNDRV_PCM_FORMAT_S16_LE:
 		bclk_rate *= 16;
 		break;
@@ -4520,18 +4534,6 @@ static int wm8994_codec_probe(struct snd_soc_codec *codec)
 	snd_soc_update_bits(codec, WM8994_INTERRUPT_STATUS_2_MASK,
 			    WM8994_IM_FIFOS_ERR_EINT_MASK,
 			    1 << WM8994_IM_FIFOS_ERR_EINT_SHIFT);
-
-	/* Enable bandgap-VREFC */
-	/* Note: VREFC is required for jack detection in
-	 * low power jack detect mode */
-	/* TODO: get the hardcoded reg value macro name and the regmap sync
-	   issue resolved with the wolfson folks  */
-	snd_soc_write(codec, 0x102, 0x3);
-	regcache_sync_region(wm8994->wm8994->regmap, 0x102, 0x102);
-	snd_soc_write(codec, 0xCB, 0x3921);
-	regcache_sync_region(wm8994->wm8994->regmap, 0xCB, 0xCB);
-	snd_soc_write(codec, 0x102, 0x0);
-	regcache_sync_region(wm8994->wm8994->regmap, 0x102, 0x102);
 
 	return 0;
 

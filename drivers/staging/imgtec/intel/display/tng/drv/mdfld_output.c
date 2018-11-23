@@ -27,16 +27,12 @@
 
 #include <linux/init.h>
 #include <linux/kernel.h>
-#include "displays/hdmi.h"
-
-#include "psb_drv.h"
-#include "android_hdmi.h"
-
-#ifdef CONFIG_SUPPORT_MIPI
 #include "mdfld_dsi_dbi.h"
 #include "mdfld_dsi_dpi.h"
 #include "mdfld_output.h"
 #include "mdfld_dsi_output.h"
+
+#include "displays/hdmi.h"
 #include "displays/jdi_vid.h"
 #include "displays/jdi_cmd.h"
 #include "displays/cmi_vid.h"
@@ -48,6 +44,8 @@
 #include "displays/sdc25x16_cmd.h"
 #include "displays/jdi25x16_vid.h"
 #include "displays/jdi25x16_cmd.h"
+#include "psb_drv.h"
+#include "android_hdmi.h"
 
 static struct intel_mid_panel_list panel_list[] = {
 	{JDI_7x12_VID, MDFLD_DSI_ENCODER_DPI, jdi_vid_init},
@@ -106,7 +104,7 @@ mdfld_dsi_encoder_t is_panel_vid_or_cmd(struct drm_device *dev)
 		if (panel_list[i].p_type == dev_priv->panel_id)
 			return panel_list[i].encoder_type;
 	}
-	DRM_INFO("%s : Could not find panel: pabel_id = %d, ARRAY_SIZE = %zd",
+	DRM_INFO("%s : Could not find panel: dev_priv->pabel_id = %d, ARRAY_SIZE(panel_list) = %d",
 			__func__, dev_priv->panel_id, ARRAY_SIZE(panel_list));
 	DRM_INFO("%s : Crashing...", __func__);
 	BUG();
@@ -114,16 +112,13 @@ mdfld_dsi_encoder_t is_panel_vid_or_cmd(struct drm_device *dev)
 	/* This should be unreachable */
 	return 0;
 }
-#endif
 
 void init_panel(struct drm_device *dev, int mipi_pipe, enum panel_type p_type)
 {
 	struct drm_psb_private *dev_priv =
 		(struct drm_psb_private *) dev->dev_private;
-#ifdef CONFIG_SUPPORT_MIPI
 	struct panel_funcs *p_funcs = NULL;
 	int i = 0, ret = 0;
-#endif
 	struct drm_connector *connector;
 
 #ifdef CONFIG_SUPPORT_HDMI
@@ -148,7 +143,6 @@ void init_panel(struct drm_device *dev, int mipi_pipe, enum panel_type p_type)
 	}
 #endif
 
-#ifdef CONFIG_SUPPORT_MIPI
 	dev_priv->cur_pipe = mipi_pipe;
 	p_funcs = kzalloc(sizeof(struct panel_funcs), GFP_KERNEL);
 
@@ -166,12 +160,10 @@ void init_panel(struct drm_device *dev, int mipi_pipe, enum panel_type p_type)
 			break;
 		}
 	}
-#endif
 }
 
 void mdfld_output_init(struct drm_device *dev)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	enum panel_type p_type1;
 
 	/* MIPI panel 1 */
@@ -186,11 +178,10 @@ void mdfld_output_init(struct drm_device *dev)
 		init_panel(dev, 2, p_type2);
 	}
 #endif
-#endif
 
 #ifdef CONFIG_SUPPORT_HDMI
 	/* HDMI panel */
-	init_panel(dev, 0, HDMI);
+	init_panel(dev, 1, HDMI);
 #endif
 }
 

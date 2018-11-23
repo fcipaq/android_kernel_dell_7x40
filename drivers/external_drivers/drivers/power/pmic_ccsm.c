@@ -61,7 +61,6 @@
 #include <linux/reboot.h>
 #include <linux/notifier.h>
 #include <linux/power/battery_id.h>
-#include <linux/gpio.h>
 #include "pmic_ccsm.h"
 
 /* Macros */
@@ -87,13 +86,12 @@
 /* 100mA value definition for setting the inlimit in bq24261 */
 #define USBINPUTICC100VAL	100
 
-#define SOC_ACOK 179
-static struct workqueue_struct *soc_acok_wq;
+#define OHM_MULTIPLIER		10
 
 /* Type definitions */
 static void pmic_bat_zone_changed(void);
 static void pmic_battery_overheat_handler(bool);
-
+static int pmic_enable_dock_charging(bool);
 /* Extern definitions */
 
 /* Global declarations */
@@ -144,6 +142,8 @@ u16 pmic_inlmt[][2] = {
 	{ 500, CHGRCTRL1_FUSB_INLMT_500},
 	{ 900, CHGRCTRL1_FUSB_INLMT_900},
 	{ 1500, CHGRCTRL1_FUSB_INLMT_1500},
+	{ 2000, CHGRCTRL1_FUSB_INLMT_1500},
+	{ 2500, CHGRCTRL1_FUSB_INLMT_1500},
 };
 
 
@@ -420,6 +420,9 @@ static struct pmic_regs_def pmic_regs_bc[] = {
 	PMIC_REG_DEF(THRMZN3H_ADDR_BC),
 	PMIC_REG_DEF(THRMZN4L_ADDR_BC),
 	PMIC_REG_DEF(THRMZN4H_ADDR_BC),
+	PMIC_REG_DEF(GPIO3CTLO_ADDR),
+	PMIC_REG_DEF(GPIO6CTLO_ADDR),
+	PMIC_REG_DEF(GPIO3CTLI_ADDR),
 };
 
 static struct pmic_regs_def pmic_regs_sc[] = {
@@ -443,6 +446,10 @@ static struct pmic_regs_def pmic_regs_sc[] = {
 	PMIC_REG_DEF(USBIDCTRL_ADDR),
 	PMIC_REG_DEF(USBIDSTAT_ADDR),
 	PMIC_REG_DEF(WAKESRC_ADDR),
+	PMIC_REG_DEF(USBPHYCTRL_ADDR),
+	PMIC_REG_DEF(DBG_USBBC1_ADDR),
+	PMIC_REG_DEF(DBG_USBBC2_ADDR),
+	PMIC_REG_DEF(DBG_USBBCSTAT_ADDR),
 	PMIC_REG_DEF(USBPATH_ADDR),
 	PMIC_REG_DEF(USBSRCDETSTATUS_ADDR),
 	PMIC_REG_DEF(THRMBATZONE_ADDR_SC),
@@ -456,6 +463,9 @@ static struct pmic_regs_def pmic_regs_sc[] = {
 	PMIC_REG_DEF(THRMZN3H_ADDR_SC),
 	PMIC_REG_DEF(THRMZN4L_ADDR_SC),
 	PMIC_REG_DEF(THRMZN4H_ADDR_SC),
+	PMIC_REG_DEF(GPIO3CTLO_ADDR),
+	PMIC_REG_DEF(GPIO6CTLO_ADDR),
+	PMIC_REG_DEF(GPIO3CTLI_ADDR),
 };
 
 static struct pmic_regs_def pmic_tt_regs[] = {
@@ -692,12 +702,13 @@ static void pmic_get_bat_zone(int *bat_zone)
 
 static void pmic_bat_zone_changed(void)
 {
-	int cur_zone;
+	int cur_zone, temp = 0;
 	struct power_supply *psy_bat;
 
 	pmic_get_bat_zone(&cur_zone);
-	dev_info(chc.dev, "Battery Zone changed. Current zone is %d\n",
-			cur_zone);
+	pmic_get_battery_pack_temp(&temp);
+	dev_info(chc.dev, "Battery Zone changed. Current zone:%d, temp:%d\n",
+			cur_zone, temp);
 
 	/* if current zone is the top and bottom zones then report OVERHEAT
 	 */
@@ -841,6 +852,79 @@ static inline int update_zone_cv(int zone, u8 reg_val)
 	return pmic_write_tt(addr_cv, reg_val);
 }
 
+/**
+ * get_scove_tempzone_val - get tempzone register val for a particular zone
+ * @adc_val: adc_value passed for zone temp
+ * @temp: zone temperature
+ *
+ * Returns temp zone alert value
+ */
+static u16 get_scove_tempzone_val(u16 resi_val, int temp)
+{
+	u8 cursel = 0, hys = 0;
+	u16 trsh = 0, count = 0, bsr_num = 0;
+	u16 adc_thold = 0, tempzone_val = 0;
+	s16 hyst = 0;
+	int retval;
+
+	/* multiply to convert into Ohm*/
+	resi_val *= OHM_MULTIPLIER;
+
+	/* CUR = max(floor(log2(round(ADCNORM/2^5)))-7,0)
+	 * TRSH = round(ADCNORM/(2^(4+CUR)))
+	 * HYS = if(∂ADCNORM>0 then max(round(∂ADCNORM/(2^(7+CUR))),1) else 0
+	 */
+
+	/*
+	 * while calculating the CUR[2:0], instead of log2
+	 * do a BSR (bit scan reverse) since we are dealing with integer values
+	 */
+	bsr_num = resi_val;
+	bsr_num /= (1 << 5);
+
+	while (bsr_num >>= 1)
+		count++;
+
+	/* cursel = max((count - 7), 0);
+	 * Clamp cursel to 3-bit value
+	 */
+	cursel = clamp_t(s8, (count-7), 0, 7);
+
+	/* calculate the TRSH[8:0] to be programmed */
+	trsh = ((resi_val) / (1 << (4 + cursel)));
+
+	/* calculate HYS[3:0] */
+	/* add the temp hysteresis depending upon the zones */
+	if (temp <= 0 || temp >= 60)
+		temp += 1;
+	else
+		temp += 2;
+
+	/* retrieve the resistance corresponding to temp with hysteresis */
+	retval = CONVERT_TEMP_TO_ADC(temp, (int *)&adc_thold);
+	if (unlikely(retval)) {
+		dev_err(chc.dev,
+			"Error converting temperature for zone\n");
+		return retval;
+	}
+
+	/* multiply to convert into Ohm*/
+	adc_thold *= OHM_MULTIPLIER;
+
+	hyst = (resi_val - adc_thold);
+
+	if (hyst > 0)
+		hys = max((hyst / (1 << (7 + cursel))), 1);
+	else
+		hys = 0;
+	/* Clamp hys to 4-bit value */
+	hys = clamp_t(u8, hys, 0, 15);
+
+	tempzone_val = (hys << 12) | (cursel << 9) | trsh;
+
+	return tempzone_val;
+}
+
 static inline int update_zone_temp(int zone, u16 adc_val)
 {
 	int ret;
@@ -856,32 +940,6 @@ static inline int update_zone_temp(int zone, u16 adc_val)
 			offset_zone += 1;
 
 		addr_tzone = THRMZN4H_ADDR_SC - (2 * offset_zone);
-
-		/*
-		 * Override the adc values received from the LUT with the
-		 * values received from the PMIC hatdware team. SC pmic gets
-		 * 12-bit of ADC results however only 9-bits of the values can
-		 * be programmed into the temperature zone registers.
-		 */
-		switch (zone) {
-		case 0:
-			adc_val = THRMZN4_SC_ADCVAL;
-			break;
-		case 1:
-			adc_val = THRMZN3_SC_ADCVAL;
-			break;
-		case 2:
-			adc_val = THRMZN2_SC_ADCVAL;
-			break;
-		case 3:
-			adc_val = THRMZN1_SC_ADCVAL;
-			break;
-		case 4:
-			adc_val = THRMZN0_SC_ADCVAL;
-			break;
-		default:
-			dev_err(chc.dev, "no ADC default values\n");
-		}
 	} else {
 		dev_err(chc.dev, "%s: invalid vendor id %X\n", __func__, vendor_id);
 		return -EINVAL;
@@ -985,6 +1043,18 @@ int pmic_set_ilimma(int ilim_ma)
 	u8 reg_val;
 	int ret;
 
+	if (ilim_ma >= 1500) {
+		if (chc.pdata->inlmt_to_reg)
+			chc.pdata->inlmt_to_reg(ilim_ma, &reg_val);
+
+		ret = pmic_write_tt(TT_USBINPUTICC1500VAL_ADDR, reg_val);
+		if (ret) {
+			dev_err(chc.dev, "Error in updating TT-reg(%x): %d\n",
+					TT_USBINPUTICC1500VAL_ADDR, ret);
+			return ret;
+		}
+	}
+
 	lookup_regval(pmic_inlmt, ARRAY_SIZE(pmic_inlmt),
 			ilim_ma, &reg_val);
 	dev_dbg(chc.dev, "Setting inlmt %d in register %x=%x\n", ilim_ma,
@@ -1064,6 +1134,88 @@ int pmic_get_battery_pack_temp(int *temp)
 	return pmic_read_adc_val(GPADC_BATTEMP0, temp, &chc);
 }
 
+#if 0
+static bool is_hvdcp_charging_enabled(int mask)
+{
+	int ret;
+	u8 val;
+
+	if (mask) {
+		/* Enable VDPSRC so that it stays on when switch is closed */
+		ret = intel_scu_ipc_update_register(DBG_USBBC2_ADDR,
+				DBG_USBBC2_EN_VDPSRC_MASK,
+				DBG_USBBC2_EN_VDPSRC_MASK);
+		if (ret) {
+			dev_err(chc.dev,
+				"Error updating DBG_USBBC2-register 0x%3x\n",
+				DBG_USBBC2_ADDR);
+			return false;
+		}
+
+		/* Enable SW control of the USB charger type detection */
+		ret = intel_scu_ipc_update_register(DBG_USBBC1_ADDR,
+			DBG_USBBC1_SWCTRL_EN_MASK | DBG_USBBC1_EN_CMP_DM_MASK |
+			DBG_USBBC1_EN_CMP_DP_MASK | DBG_USBBC1_EN_CHG_DET_MASK,
+			DBG_USBBC1_SWCTRL_EN_MASK | DBG_USBBC1_EN_CMP_DM_MASK |
+			DBG_USBBC1_EN_CMP_DP_MASK |
+			DBG_USBBC1_EN_CHG_DET_MASK);
+		if (ret) {
+			dev_err(chc.dev,
+				"Error updating DBG_USBBC1-register 0x%3x\n",
+				DBG_USBBC1_ADDR);
+			return false;
+		}
+
+		/* Wait >1.5 sec */
+		msleep(HVDCPDET_SLEEP_TIME);
+
+		/* Check if DM<VDATDET.  If a HVDCP is attached, it will remove
+		 * the DP/DM short & enable Rdm_dwn, pulling down DM to 0V.
+		 * DCP will keep DM at 0.6V
+		 */
+		ret = pmic_read_reg(DBG_USBBCSTAT_ADDR, &val);
+		if (ret) {
+			dev_err(chc.dev,
+				"Error reading DBG_USBBCSTAT-register 0x%3x\n",
+				DBG_USBBCSTAT_ADDR);
+			return false;
+		}
+
+		/* If "0", HVDCP detected */
+		dev_info(chc.dev,
+				"DBG_USBBCSTAT-register 0x%3x: %x\n",
+				DBG_USBBCSTAT_ADDR, val);
+		if (!(val & DBG_USBBCSTAT_CMP_DM_MASK)) {
+			/* Enable HVDCP 12V charging  by enabling VDMSRC */
+			ret = intel_scu_ipc_update_register(DBG_USBBC2_ADDR,
+					DBG_USBBC2_EN_VDMSRC_MASK,
+					DBG_USBBC2_EN_VDMSRC_MASK);
+			if (ret) {
+				dev_err(chc.dev,
+				"Error updating DBG_USBBC2-register 0x%3x\n",
+				DBG_USBBC2_ADDR);
+			} else {
+				/* HVDCP detection completed successfully */
+				dev_info(chc.dev,
+					"HVDCP 12V charging enabled\n");
+				return true;
+			}
+		}
+	}
+
+	/* Cleanup on either HVDCP-not-detected or HVDCP-disconnected */
+	dev_info(chc.dev, "HVDCP 12V charging disabled");
+	/* Open PMIC switch */
+	intel_scu_ipc_iowrite8(USBPHYCTRL_ADDR, 0x00);
+	/* Disable VDMSRC & VDPSRC */
+	intel_scu_ipc_iowrite8(DBG_USBBC2_ADDR, 0x00);
+	/* Disable SW control of the USB charger type detection */
+	intel_scu_ipc_iowrite8(DBG_USBBC1_ADDR, 0x00);
+
+	return false;
+}
+#endif
+
 static int scove_get_usbid(void)
 {
 	int ret;
@@ -1099,11 +1251,12 @@ static int scove_get_usbid(void)
 		goto err_exit;
 	}
 
-	if ((rid > 11150) && (rid < 13640))
+	dev_info(chc.dev, "%s, USBID read: %d\n", __func__, rid);
+	if ((rid > 9100) && (rid < 60000))
 		id = RID_A;
-	else if ((rid > 6120) && (rid < 7480))
+	else if ((rid > 5172) && (rid < 7480))
 		id = RID_B;
-	else if ((rid > 3285) && (rid < 4015))
+	else if ((rid > 2832) && (rid < 4015))
 		id = RID_C;
 
 err_exit:
@@ -1172,6 +1325,7 @@ static int get_charger_type(void)
 static void handle_internal_usbphy_notifications(int mask)
 {
 	struct power_supply_cable_props cap = {0};
+//	bool hvdcp_chgr = false;
 
 	if (mask) {
 		cap.chrg_evt = POWER_SUPPLY_CHARGER_EVENT_CONNECT;
@@ -1182,31 +1336,58 @@ static void handle_internal_usbphy_notifications(int mask)
 		cap.chrg_type = chc.charger_type;
 	}
 
-	if (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_SDP)
-		cap.ma = 0;
-	else if ((cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_DCP)
-			|| (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_CDP)
+	if (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_SDP) {
+		if (chc.pdata->usbspec_override)
+			cap.ma = 500;
+		else
+			cap.ma = 0;
+	} else if ((cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_CDP)
 			|| (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_SE1)
 			|| (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_ACA)
 			|| (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_ACA_DOCK))
 		cap.ma = 1500;
+	else if (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_DCP)
+		cap.ma = 2000;
+
+	if ((cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_ACA)
+			|| (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_ACA_DOCK))
+		chc.aca_det_done = mask ? true : false;
 
 	dev_info(chc.dev, "Notifying OTG ev:%d, evt:%d, chrg_type:%d, mA:%d\n",
 			USB_EVENT_CHARGER, cap.chrg_evt, cap.chrg_type,
 			cap.ma);
+
 	atomic_notifier_call_chain(&chc.otg->notifier,
 			USB_EVENT_CHARGER, &cap);
+
+	/*if (cap.chrg_type == POWER_SUPPLY_CHARGER_TYPE_USB_DCP) {
+		hvdcp_chgr = is_hvdcp_charging_enabled(mask);
+		if (hvdcp_chgr && mask) {
+			cap.chrg_evt = POWER_SUPPLY_CHARGER_EVENT_UPDATE;
+			cap.ma = 2000;
+
+			dev_info(chc.dev, "Notifying OTG ev:%d, evt:%d,"
+					" chrg_type:%d, mA:%d\n",
+					USB_EVENT_CHARGER, cap.chrg_evt,
+					cap.chrg_type, cap.ma);
+			atomic_notifier_call_chain(&chc.otg->notifier,
+					USB_EVENT_CHARGER, &cap);
+		}
+	}*/
 }
 
 /* ShadyCove-WA for VBUS removal detect issue */
 int pmic_handle_low_supply(void)
 {
 	int ret;
-	u8 val;
+	u8 val, vinsel;
 	int vendor_id = chc.pmic_id & PMIC_VENDOR_ID_MASK;
+	struct power_supply_cable_props cap = {0};
 
 	dev_info(chc.dev, "Low-supply event received from external-charger\n");
-	if (vendor_id == BASINCOVE_VENDORID || !chc.vbus_connect_status) {
+	if (vendor_id == BASINCOVE_VENDORID
+			|| (!chc.vbus_connect_status
+			&& !chc.vdcin_connect_status)) {
 		dev_err(chc.dev, "Ignore Low-supply event received\n");
 		return 0;
 	}
@@ -1219,8 +1400,11 @@ int pmic_handle_low_supply(void)
 			SCHGRIRQ1_ADDR);
 		return ret;
 	}
+	dev_info(chc.dev, "%s: SCHGRIRQ1:%x\n", __func__, val);
+	dev_info(chc.dev, "%s: rid:%d\n", __func__, scove_get_usbid());
 
-	if (!(val & SCHRGRIRQ1_SVBUSDET_MASK)) {
+	if (chc.vbus_connect_status
+		&& !(val & SCHRGRIRQ1_SVBUSDET_MASK)) {
 		int mask = 0;
 
 		dev_info(chc.dev, "USB VBUS Removed. Notifying OTG driver\n");
@@ -1238,6 +1422,37 @@ int pmic_handle_low_supply(void)
 			mutex_unlock(&chc.evt_queue_lock);
 		}
 	}
+
+	ret = pmic_read_reg(GPIO3CTLI_ADDR, &vinsel);
+	if (ret) {
+		dev_err(chc.dev,
+			"Error reading GPIO3CTLI-register 0x%2x\n",
+			GPIO3CTLI_ADDR);
+		return ret;
+	}
+	if ((vinsel & GPIO3CTLI_DIN3_HIGH_MASK) &&
+		!(val & SCHRGRIRQ1_SDCDET_MASK)) {
+			ret = pmic_enable_dock_charging(false);
+			if (ret) {
+				dev_err(chc.dev,
+				"Enable MUX vbus path: IPC write is failed\n");
+			return ret;
+			}
+
+		chc.vdcin_connect_status = false;
+		cap.chrg_evt = POWER_SUPPLY_CHARGER_EVENT_DISCONNECT;
+		cap.chrg_type = POWER_SUPPLY_CHARGER_TYPE_DOCK;
+		cap.ma = 2500;
+		dev_info(chc.dev,
+			"dcdet Notifying ev:%d, evt:%d, chrg_type:%d, mA:%d\n",
+			USB_EVENT_CHARGER, cap.chrg_evt, cap.chrg_type,
+			cap.ma);
+
+		atomic_notifier_call_chain(&chc.otg->notifier,
+			USB_EVENT_CHARGER, &cap);
+
+	}
+
 
 	return ret;
 }
@@ -1293,60 +1508,122 @@ static void handle_level0_interrupt(u8 int_reg, u8 stat_reg,
 
 	return ;
 }
-
-
-static void pmic_ccsm_check_host_connect(u8 int_reg, u8 stat_reg)
+static int pmic_enable_dock_charging(bool enable)
 {
-	int __maybe_unused mask;
-	int vendor_id = chc.pmic_id & PMIC_VENDOR_ID_MASK;
-	int __maybe_unused ret;
-	u8 __maybe_unused val;
+	int ret;
 
-	if (vendor_id == SHADYCOVE_VENDORID) {
-		if (int_reg & CHRGRIRQ1_SUSBIDFLTDET_MASK)
-			dev_info(chc.dev,
-				"USBID-FLT interrupt received\n");
+	if (enable) {
+		/* ENABLING MUX_EN */
+		ret = intel_scu_ipc_iowrite8(GPIO6CTLO_ADDR,
+					(GPIO6CTLO_DIR6_OUTPUT |
+					GPIO6CTLO_DRV6_PSHPLL |
+					GPIO6CTLO_REN6_PULL_EN |
+					GPIO6CTLO_DOUT6_HIGH));
+		if (ret)
+			return ret;
+		/* VIN_SEL set to HIGH */
+		ret = intel_scu_ipc_iowrite8(GPIO3CTLO_ADDR,
+					(GPIO3CTLO_DIR3_OUTPUT |
+					GPIO3CTLO_DRV3_PSHPLL |
+					GPIO3CTLO_REN3_PULL_EN |
+					GPIO3CTLO_DOUT3_HIGH));
 
-		ret = pmic_read_reg(CHGRCTRL1_ADDR, &val);
-		mask = ((stat_reg & SCHRGRIRQ1_SUSBIDGNDDET_MASK)
-				== SHRT_GND_DET) ? 1 : 0;
+		if (ret)
+			return ret;
 
-		if (int_reg & CHRGRIRQ1_SUSBIDGNDDET_MASK) {
-			if (mask) {
-				dev_info(chc.dev,
-				"USBID-GND Detected. Notifying OTG\n");
-				val |= (1<<6);
-				ret = intel_scu_ipc_iowrite8(
-				CHGRCTRL1_ADDR,
-				val);
-			} else {
-				dev_info(chc.dev,
-				"USBID-GND Removed. Notifying OTG\n");
-				val &= ~(1<<6);
-				ret = intel_scu_ipc_iowrite8(
-				CHGRCTRL1_ADDR,
-				val);
-				chc.otg_mode_enabled = false;
-			}
+		dev_info(chc.dev,
+		"%s Dock chg. is enabled,MUX_EN and VIN_SEL is high \n",
+		__func__);
+	} else {
 
-			atomic_notifier_call_chain(&chc.otg->notifier,
-					USB_EVENT_ID, &mask);
-		}
+		/* ENABLING MUX_EN */
+		ret = intel_scu_ipc_iowrite8(GPIO6CTLO_ADDR,
+					(GPIO6CTLO_DIR6_OUTPUT |
+					GPIO6CTLO_DRV6_PSHPLL |
+					GPIO6CTLO_REN6_PULL_EN |
+					(GPIO6CTLO_DOUT6_HIGH)));
+
+		if (ret)
+			return ret;
+		/* VIN_SEL set to LOW */
+		ret = intel_scu_ipc_iowrite8(GPIO3CTLO_ADDR,
+					(GPIO3CTLO_DIR3_OUTPUT |
+					GPIO3CTLO_DRV3_PSHPLL |
+					GPIO3CTLO_REN3_PULL_EN &
+					(~GPIO3CTLO_DOUT3_HIGH)));
+		if (ret)
+			return ret;
+
+		dev_info(chc.dev,
+		"%s Dock chg. is disabled,MUX_EN is high,VIN_SEL is low\n",
+			__func__);
+
 	}
+
+	return 0;
 }
 
 static void handle_level1_interrupt(u8 int_reg, u8 stat_reg)
 {
 	int mask;
 	u8 val;
-	u16 val1;
 	int ret;
 	int vendor_id = chc.pmic_id & PMIC_VENDOR_ID_MASK;
+	struct power_supply_cable_props cap = {0};
 
 	if (!int_reg)
 		return;
 
-	pmic_ccsm_check_host_connect(int_reg, stat_reg);
+	if (vendor_id == SHADYCOVE_VENDORID) {
+		if (int_reg & CHRGRIRQ1_SUSBIDFLTDET_MASK) {
+			dev_info(chc.dev,
+				"USBID-FLT interrupt received\n");
+
+			ret = pmic_read_reg(SCHGRIRQ1_ADDR, &val);
+			if (ret) {
+				dev_err(chc.dev,
+					"Error reading SCHGRIRQ1-register 0x%2x\n",
+					SCHGRIRQ1_ADDR);
+				return;
+			}
+			dev_info(chc.dev,
+				"USBID-FLT, SCHGRIRQ1:%x, aca_det_done:%d\n",
+				val, chc.aca_det_done);
+
+			/* Sometimes VBUS-connect interrupt is not received.
+			 * To handle this, the following is done:
+			 * If USBIDFLT interrupt is received with midrange-RID,
+			 * with VBUS-on and ACA-detection is not done yet, then
+			 * ACA-detection needs to happen.
+			 */
+			if (((val & SCHRGRIRQ1_SUSBIDGNDDET_MASK) == SHRT_MID_DET)
+					&& (val & SCHRGRIRQ1_SVBUSDET_MASK)
+					&& !chc.aca_det_done) {
+				int mask = 0;
+				atomic_notifier_call_chain(&chc.otg->notifier,
+						USB_EVENT_VBUS, &mask);
+				chc.otg_mode_enabled = false;
+
+				handle_internal_usbphy_notifications(1);
+			}
+
+		}
+
+		mask = ((stat_reg & SCHRGRIRQ1_SUSBIDGNDDET_MASK)
+				== SHRT_GND_DET) ? 1 : 0;
+		if (int_reg & CHRGRIRQ1_SUSBIDGNDDET_MASK) {
+			if (mask)
+				dev_info(chc.dev,
+				"USBID-GND Detected. Notifying OTG\n");
+			else
+				dev_info(chc.dev,
+				"USBID-GND Removed. Notifying OTG\n");
+
+			atomic_notifier_call_chain(&chc.otg->notifier,
+					USB_EVENT_ID, &mask);
+		}
+	}
+
 	mask = !!(int_reg & stat_reg);
 	if ((vendor_id == BASINCOVE_VENDORID) &&
 			(int_reg & CHRGRIRQ1_SUSBIDDET_MASK)) {
@@ -1363,15 +1640,32 @@ static void handle_level1_interrupt(u8 int_reg, u8 stat_reg)
 
 	if (int_reg & CHRGRIRQ1_SVBUSDET_MASK) {
 		if (mask) {
+			/* This is to handle the scenario where a connect event
+			 * is received with already connect-status for USB.
+			 * Previous disconnect event could have been missed due
+			 * to synchronization issues of low-supply fault or
+			 * late update to SCHRGRIRQ1_SVBUSDET
+			 */
+			if (chc.vbus_connect_status) {
+				int rmv_mask = 0;
+
+				dev_info(chc.dev, "Previous USB VBUS removal not received\n");
+				dev_info(chc.dev, "USB VBUS removal forced. Notifying OTG driver\n");
+				if (chc.is_internal_usb_phy
+						&& !chc.otg_mode_enabled)
+					handle_internal_usbphy_notifications(rmv_mask);
+				else {
+					atomic_notifier_call_chain(&chc.otg->notifier,
+							USB_EVENT_VBUS, &rmv_mask);
+					chc.otg_mode_enabled = false;
+				}
+				msleep(50);
+			}
+
 			dev_info(chc.dev,
 				"USB VBUS Detected. Notifying OTG driver\n");
 			chc.vbus_connect_status = true;
 
-			msleep(100);
-			val1 = ioread16(chc.pmic_intr_iomap);
-			int_reg = (u8)(val1 >> 8);
-			pmic_read_reg(SCHGRIRQ1_ADDR, &stat_reg);
-			pmic_ccsm_check_host_connect(int_reg, stat_reg);
 			ret = pmic_read_reg(CHGRCTRL1_ADDR, &val);
 			if (ret != 0) {
 				dev_err(chc.dev,
@@ -1398,48 +1692,52 @@ static void handle_level1_interrupt(u8 int_reg, u8 stat_reg)
 		}
 	}
 
+	if (int_reg & CHRGRIRQ1_SDCDET_MASK) {
+		if (mask) {
+			msleep(200);
+			dev_info(chc.dev,
+				"DC Detected. Notifying\n");
+			ret = pmic_enable_dock_charging(true);
+			if (ret) {
+				dev_err(chc.dev,
+				"Enable MUX VIN path: IPC write is failed\n");
+				return;
+			}
+			chc.vdcin_connect_status = true;
+			cap.chrg_evt = POWER_SUPPLY_CHARGER_EVENT_CONNECT;
+		} else {
+			dev_info(chc.dev, "DC Removed. Notifying\n");
+			ret = pmic_enable_dock_charging(false);
+			if (ret) {
+				dev_err(chc.dev,
+				"Enable Mux vbus path: IPC write is failed\n");
+				return;
+			}
+			chc.vdcin_connect_status = false;
+			cap.chrg_evt = POWER_SUPPLY_CHARGER_EVENT_DISCONNECT;
+		}
+
+/* fcipaq */
+/* Intercept broken dock charger type detection when using VBus power for EP keyboard */
+#if IS_ENABLED(CONFIG_BQ24261_CHARGER_EP)
+		cap.chrg_type = POWER_SUPPLY_CHARGER_TYPE_NONE;
+		cap.chrg_evt = POWER_SUPPLY_CHARGER_EVENT_DISCONNECT;
+		cap.ma = 500;
+#else
+		cap.chrg_type = POWER_SUPPLY_CHARGER_TYPE_DOCK;
+		cap.ma = 2500;
+#endif
+
+		dev_info(chc.dev,
+			"Notifying ev:%d, evt:%d, chrg_type:%d, mA:%d\n",
+			USB_EVENT_CHARGER, cap.chrg_evt, cap.chrg_type,
+			cap.ma);
+		atomic_notifier_call_chain(&chc.otg->notifier,
+			USB_EVENT_CHARGER, &cap);
+
+	}
+
 	return;
-}
-
-static irqreturn_t soc_acok_isr(int irq, void *dev_id)
-{
-	pr_info("%s, SOC_ACOK = %d\n", __func__,
-		gpio_get_value(SOC_ACOK) ? 1 : 0);
-
-	if ((gpio_get_value(SOC_ACOK) ? 1 : 0))
-		queue_delayed_work(soc_acok_wq, &chc.acok_irq_work, 0.5 * HZ);
-
-	return IRQ_HANDLED;
-}
-
-static void acok_irq_work_function(struct work_struct *work)
-{
-	pmic_handle_low_supply();
-}
-
-static int soc_acok_init(struct platform_device *pdev)
-{
-	int err = 0;
-	unsigned gpio = SOC_ACOK;
-	unsigned irq_num = gpio_to_irq(gpio);
-
-	soc_acok_wq = create_singlethread_workqueue("soc_acok_wq");
-	INIT_DELAYED_WORK(&chc.acok_irq_work, acok_irq_work_function);
-
-	err = gpio_request(gpio, "soc_acok");
-	if (err)
-		pr_info("Fail to request GPIO %d.\n", gpio);
-
-	err = gpio_direction_input(gpio);
-	if (err)
-		pr_info("Fail to configure GPIO %d as input.\n", gpio);
-
-	err = request_irq(irq_num, soc_acok_isr,
-		IRQF_TRIGGER_RISING | IRQF_SHARED, "soc_acok", pdev);
-	if (err < 0)
-		pr_info("Fail to request IRQ %d.\n", irq_num);
-
-	return 0;
 }
 
 static void pmic_event_worker(struct work_struct *work)
@@ -1483,7 +1781,8 @@ static irqreturn_t pmic_isr(int irq, void *data)
 	else if (vendor_id == SHADYCOVE_VENDORID)
 		mask = ((CHRGRIRQ1_SVBUSDET_MASK) |
 				(CHRGRIRQ1_SUSBIDFLTDET_MASK) |
-				(CHRGRIRQ1_SUSBIDGNDDET_MASK));
+				(CHRGRIRQ1_SUSBIDGNDDET_MASK) |
+				(CHRGRIRQ1_SDCDET_MASK));
 
 	pmic_intr = ioread16(chc.pmic_intr_iomap);
 	chgrirq0_int = (u8)pmic_intr;
@@ -1582,12 +1881,15 @@ end:
 
 	return IRQ_HANDLED;
 }
+
 static int pmic_init(void)
 {
 	int ret = 0, i, temp_mon_ranges;
 	u16 adc_val;
 	u8 reg_val;
+	int vendor_id = chc.pmic_id & PMIC_VENDOR_ID_MASK;
 	struct ps_pse_mod_prof *bcprof = chc.actual_bcprof;
+
 	temp_mon_ranges = min_t(u16, bcprof->temp_mon_ranges,
 			BATT_TEMP_NR_RNG);
 	for (i = 0; i < temp_mon_ranges; ++i) {
@@ -1599,6 +1901,18 @@ static int pmic_init(void)
 				"Error converting temperature for zone %d!!\n",
 				i);
 			return ret;
+		}
+
+		if (vendor_id == SHADYCOVE_VENDORID) {
+			/* Values obtained from lookup-table are resistance values.
+			 * Convert these to raw adc-codes
+			 */
+			adc_val = get_scove_tempzone_val(adc_val,
+					bcprof->temp_mon_range[i].temp_up_lim);
+			dev_info(chc.dev,
+					"adc-val:%x configured for temp:%d\n",
+					adc_val,
+					bcprof->temp_mon_range[i].temp_up_lim);
 		}
 
 		ret = update_zone_temp(i, adc_val);
@@ -1641,6 +1955,14 @@ static int pmic_init(void)
 				dev_err(chc.dev,
 					"Error converting low lim temp!!\n");
 				return ret;
+			}
+
+			if (vendor_id == SHADYCOVE_VENDORID) {
+				adc_val = get_scove_tempzone_val(adc_val,
+						bcprof->temp_low_lim);
+				dev_info(chc.dev,
+					"adc-val:%x configured for temp:%d\n",
+					adc_val, bcprof->temp_low_lim);
 			}
 
 			ret = update_zone_temp(i+1, adc_val);
@@ -1743,8 +2065,8 @@ static void set_pmic_batt_prof(struct ps_pse_mod_prof *new_prof,
 	int num_zones;
 	int split_index;
 	int i, j = 0;
-	short int temp_up_lim = 0;
-	short int interval = 0;
+	short int temp_up_lim;
+	short int interval;
 
 	if ((new_prof == NULL) || (bprof == NULL))
 		return;
@@ -1795,7 +2117,7 @@ static int pmic_check_initial_events(void)
 {
 	struct pmic_event *evt;
 	int ret;
-	u8 mask = (CHRGRIRQ1_SVBUSDET_MASK);
+	u8 mask = (CHRGRIRQ1_SVBUSDET_MASK) | (CHRGRIRQ1_SDCDET_MASK);
 	int vendor_id = chc.pmic_id & PMIC_VENDOR_ID_MASK;
 
 	evt = kzalloc(sizeof(struct pmic_event), GFP_KERNEL);
@@ -1956,6 +2278,11 @@ static int pmic_chrgr_probe(struct platform_device *pdev)
 		retval = -ENOMEM;
 		goto ioremap_failed;
 	}
+	retval = pmic_enable_dock_charging(false);
+	if (retval)
+		dev_err(chc.dev, "MUX VBUS  enable: IPC write is failed\n");
+
+
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0))
 	chc.otg = usb_get_transceiver();
@@ -1986,13 +2313,6 @@ static int pmic_chrgr_probe(struct platform_device *pdev)
 			chc.irq);
 		goto otg_req_failed;
 	}
-
-	retval = gpio_request(57, "SOC_5V_EN");
-	if (retval)
-		pr_info("Failed to request GPIO 57.\n");
-	retval = gpio_direction_output(57, 0);
-	if (retval)
-		pr_info("Failed to configure GPIO 57 as output low.\n");
 
 	retval = pmic_check_initial_events();
 	if (unlikely(retval)) {
@@ -2026,8 +2346,6 @@ static int pmic_chrgr_probe(struct platform_device *pdev)
 #ifdef CONFIG_DEBUG_FS
 	pmic_debugfs_init();
 #endif
-
-	soc_acok_init(pdev);
 	return 0;
 
 unmask_irq_failed:

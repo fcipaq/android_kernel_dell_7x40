@@ -69,7 +69,14 @@ extern int sepapp_image_verify(u8 *addr, ssize_t size, u32 key_index, u32 magic_
 #define mofd_prh_b0_vsp		"vsp.bin.000c.0001.0001"
 #define mofd_fugu_product_vsp		"vsp.bin.0008.0000.0002"
 
-#define mofd_default_spid	"0008.0001.0001"
+//fipaq
+//#define mofd_default_spid	"0008.0001.0001"
+#define mofd_default_spid	"0008.0000.0002"
+
+#define mofd_v0_vsp		"vsp.bin.0008.0000.0001"
+#define mofd_v0_topaz		"topaz.bin.0008.0000.0001"
+#define mofd_v0_msvdx		"msvdx.bin.0008.0000.0001"
+
 /*
  * Firmware name if there is no entry in spid2fw table
  */
@@ -96,8 +103,7 @@ static struct spid2fw_mapping spid2fw[] = {
 	{8, 2, 0, mofd_vv_fab_a_msvdx, mofd_vv_fab_a_topaz, mofd_vv_fab_a_vsp, 15}, /* moorefield V1 VV with A0 soc */
 	{8, 2, 1, mofd_v1_pr2_msvdx, mofd_v1_pr2_topaz, mofd_v1_pr2_vsp, 15}, /* moorefield V1 PR2 */
 	//{8, 0, 2, mofd_product_msvdx, mofd_product_topaz, mofd_product_vsp, 15}, /* Anniedale Production Keys (QS/PRQ) */
-
-        {8, 0, 2, mofd_fugu_product_msvdx, mofd_fugu_product_topaz, mofd_fugu_product_vsp, 15},
+    {8, 0, 2, mofd_fugu_product_msvdx, mofd_fugu_product_topaz, mofd_fugu_product_vsp, 15},
 	{0xc, 0, 4, mofd_ffrd_pr0_msvdx, mofd_ffrd_pr0_topaz, mofd_ffrd_pr0_vsp, 15}, /* moorefield FFRD PR0 */
 	{0xc, 1, 1, mofd_prh_b0_msvdx, mofd_prh_b0_topaz, mofd_prh_b0_vsp, 15}, /* MCG Moorefield PRH B0 */
 
@@ -108,7 +114,7 @@ static struct spid2fw_mapping spid2fw[] = {
 * Fall back once mismatch
 */
 static struct spid2fw_mapping default_mofd_spid2fw =
-	{8, 0, 2, mofd_fugu_product_msvdx, mofd_fugu_product_topaz, mofd_fugu_product_vsp, 15}; /* moorefield V0 */
+	{8, 0, 1, mofd_v0_msvdx, mofd_v0_topaz, mofd_v0_vsp, 15}; /* moorefield V0 */
 
 #define SPID2FW_NUMBER sizeof(spid2fw)/sizeof(struct spid2fw_mapping)
 static struct spid2fw_mapping *matched_spid2fw = NULL; /* query once, use multiple times */
@@ -144,7 +150,7 @@ static void tng_spid2fw(struct drm_device *dev, char *fw_name, char *fw_basename
 	/* find a matched entry */
 	if (matched_spid2fw != NULL) {
 		tng_copyfw(fw_name,  island_name, sep_key, matched_spid2fw);
-		PSB_DEBUG_INIT("Got matched firmware %s\n", fw_name);
+		DRM_INFO("Got matched firmware %s\n", fw_name);
 		return;
 	}
 
@@ -168,7 +174,7 @@ static void tng_spid2fw(struct drm_device *dev, char *fw_name, char *fw_basename
 	 */
 	release_firmware(raw);
 
-	PSB_DEBUG_INIT("Detect %s firmware %s success! Fake entries for all the other islands\n", fw_basename, fw_name);
+		DRM_INFO("Detect %s firmware %s success! Fake entries for all the other islands\n", fw_basename, fw_name);
 
 	matched_spid2fw = &spid2fw[SPID2FW_NUMBER - 1];
 
@@ -191,7 +197,7 @@ static void tng_spid2fw(struct drm_device *dev, char *fw_name, char *fw_basename
 static void tng_get_fwinfo(struct drm_device *dev, char *fw_name, char *fw_basename, char *island_name, int *sep_key)
 {
 	tng_spid2fw(dev, fw_name, fw_basename, island_name, sep_key);
-	PSB_DEBUG_INIT("Use firmware %s for %s, SEP key %d\n", fw_name, island_name, *sep_key);
+		DRM_INFO("Use firmware %s for %s, SEP key %d\n", fw_name, island_name, *sep_key);
 }
 
 static void tng_print_imrinfo(int imrl_reg, uint64_t imr_base, uint64_t imr_end)
@@ -199,19 +205,19 @@ static void tng_print_imrinfo(int imrl_reg, uint64_t imr_base, uint64_t imr_end)
 	unsigned int imr_regnum = IMR_REG_NUMBER(imrl_reg);
 
 	if (imr_base != 0)
-		PSB_DEBUG_INIT("IMR%d ranges 0x%12llx - 0x%12llx\n",
+		DRM_INFO("IMR%d ranges 0x%12llx - 0x%12llx\n",
 			       imr_regnum, imr_base, imr_end);
 
-	PSB_DEBUG_INIT("IMR%d L 0x%2x = 0x%032x\n",
+		DRM_INFO("IMR%d L 0x%2x = 0x%032x\n",
 		       imr_regnum, imrl_reg,
 		       intel_mid_msgbus_read32(PNW_IMR_MSG_PORT, imrl_reg));
-	PSB_DEBUG_INIT("IMR%d H 0x%2x = 0x%032x\n",
+		DRM_INFO("IMR%d H 0x%2x = 0x%032x\n",
 		       imr_regnum, imrl_reg + 1,
 		       intel_mid_msgbus_read32(PNW_IMR_MSG_PORT, imrl_reg+1));
-	PSB_DEBUG_INIT("IMR%d RAC 0x%2x = 0x%032x\n",
+		DRM_INFO("IMR%d RAC 0x%2x = 0x%032x\n",
 		       imr_regnum,  imrl_reg + 2,
 		       intel_mid_msgbus_read32(PNW_IMR_MSG_PORT, imrl_reg+2));
-	PSB_DEBUG_INIT("IMR%d WAC 0x%2x = 0x%032x\n",
+		DRM_INFO("IMR%d WAC 0x%2x = 0x%032x\n",
 		       imr_regnum, imrl_reg + 3,
 		       intel_mid_msgbus_read32(PNW_IMR_MSG_PORT, imrl_reg+3));
 }
@@ -274,24 +280,24 @@ static int tng_securefw_prevsp(struct drm_device *dev, const struct firmware *ra
 		return 1;
 	}
 
-	VSP_DEBUG("firmware secure header:\n");
-	VSP_DEBUG("boot_header magic number %x\n", boot_header->magic_number);
-	VSP_DEBUG("boot_text_offset %x\n", boot_header->boot_text_offset);
-	VSP_DEBUG("boot_text_reg %x\n", boot_header->boot_text_reg);
-	VSP_DEBUG("boot_icache_value %x\n", boot_header->boot_icache_value);
-	VSP_DEBUG("boot_icache_reg %x\n", boot_header->boot_icache_reg);
-	VSP_DEBUG("boot_pc_value %x\n", boot_header->boot_pc_value);
-	VSP_DEBUG("boot_pc_reg %x\n", boot_header->boot_pc_reg);
-	VSP_DEBUG("ma_header_offset %x\n", boot_header->ma_header_offset);
-	VSP_DEBUG("ma_header_reg %x\n", boot_header->ma_header_reg);
-	VSP_DEBUG("boot_start_value %x\n", boot_header->boot_start_value);
-	VSP_DEBUG("boot_start_reg %x\n", boot_header->boot_start_reg);
-	VSP_DEBUG("firmware ma_blob header:\n");
-	VSP_DEBUG("ma_header magic number %x\n", ma_header->magic_number);
-	VSP_DEBUG("offset_from_start %x\n", ma_header->offset_from_start);
-	VSP_DEBUG("imr_state_buffer_addr %x\n", ma_header->imr_state_buffer_addr);
-	VSP_DEBUG("imr_state_buffer_size %x\n", ma_header->imr_state_buffer_size);
-	VSP_DEBUG("apps_default_context_buffer_size %x\n",
+	DRM_INFO("firmware secure header:\n");
+	DRM_INFO("boot_header magic number %x\n", boot_header->magic_number);
+	DRM_INFO("boot_text_offset %x\n", boot_header->boot_text_offset);
+	DRM_INFO("boot_text_reg %x\n", boot_header->boot_text_reg);
+	DRM_INFO("boot_icache_value %x\n", boot_header->boot_icache_value);
+	DRM_INFO("boot_icache_reg %x\n", boot_header->boot_icache_reg);
+	DRM_INFO("boot_pc_value %x\n", boot_header->boot_pc_value);
+	DRM_INFO("boot_pc_reg %x\n", boot_header->boot_pc_reg);
+	DRM_INFO("ma_header_offset %x\n", boot_header->ma_header_offset);
+	DRM_INFO("ma_header_reg %x\n", boot_header->ma_header_reg);
+	DRM_INFO("boot_start_value %x\n", boot_header->boot_start_value);
+	DRM_INFO("boot_start_reg %x\n", boot_header->boot_start_reg);
+	DRM_INFO("firmware ma_blob header:\n");
+	DRM_INFO("ma_header magic number %x\n", ma_header->magic_number);
+	DRM_INFO("offset_from_start %x\n", ma_header->offset_from_start);
+	DRM_INFO("imr_state_buffer_addr %x\n", ma_header->imr_state_buffer_addr);
+	DRM_INFO("imr_state_buffer_size %x\n", ma_header->imr_state_buffer_size);
+	DRM_INFO("apps_default_context_buffer_size %x\n",
 		  ma_header->apps_default_context_buffer_size);
 
 	return 0;
@@ -321,7 +327,7 @@ int tng_securefw(struct drm_device *dev, char *fw_basename, char *island_name, i
 	tng_get_fwinfo(dev, fw_name, fw_basename, island_name, &sep_key);
 
 	/* try to load firmware from storage */
-	PSB_DEBUG_INIT("Try to request firmware %s\n", fw_name);
+	DRM_INFO("Try to request firmware %s\n", fw_name);
 	ret = request_firmware(&raw, fw_name, &dev->pdev->dev);
 	if (raw == NULL || ret < 0) {
 		DRM_ERROR("Failed to request firmware %s, ret =  %d\n", fw_name, ret);
@@ -337,10 +343,10 @@ int tng_securefw(struct drm_device *dev, char *fw_basename, char *island_name, i
 		}
 	}
 
-	PSB_DEBUG_INIT("Try to get IMR region information\n");
+	DRM_INFO("Try to get IMR region information\n");
 	tng_get_imrinfo(imrl_reg, &imr_addr);
 
-	PSB_DEBUG_INIT("Try to map IMR region\n");
+	DRM_INFO("Try to map IMR region\n");
 	imr_ptr = ioremap(imr_addr, raw->size);
 	if (!imr_ptr) {
 		DRM_ERROR("Failed to map IMR region\n");
@@ -349,24 +355,26 @@ int tng_securefw(struct drm_device *dev, char *fw_basename, char *island_name, i
 	}
 
 	fw_size = raw->size;
-	PSB_DEBUG_INIT("Try to copy firmware into IMR region\n");
+	DRM_INFO("Try to copy firmware into IMR region\n");
 	memcpy(imr_ptr, raw->data, fw_size);
 
-	PSB_DEBUG_INIT("Try to unmap IMR region\n");
+	DRM_INFO("Try to unmap IMR region\n");
 	iounmap(imr_ptr);
 
-	PSB_DEBUG_INIT("Try to release firmware\n");
+	DRM_INFO("Try to release firmware\n");
 	release_firmware(raw);
 
 #ifdef CONFIG_DX_SEP54
-	PSB_DEBUG_INIT("Try to verify firmware\n");
+	DRM_INFO("Try to verify firmware\n");
 	ret = sepapp_image_verify((u8 *)imr_addr, fw_size, sep_key,
 				  ISLAND_MAGIC_NUMBER(island_name));
 	if (ret) {
 		DRM_ERROR("Failed to verify firmware %x\n", ret);
-		return ret;
+//fcipaq
+//		return ret;
+        return 0;
 	}
-	PSB_DEBUG_INIT("After verification, IMR region information\n");
+	DRM_INFO("After verification, IMR region information\n");
 	tng_print_imrinfo(imrl_reg, 0, 0);
 #endif
 

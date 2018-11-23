@@ -82,6 +82,17 @@ static struct platform_device vwm89942_device = {
 	},
 };
 
+static struct platform_device wm8994_ldo1_device;
+static struct platform_device wm8994_ldo2_device;
+
+#if 0
+static struct platform_device *wm1811a_reg_devices[] __initdata = {
+	&vwm89941_device,
+	&vwm89942_device,
+	&wm8994_ldo1_device,
+	&wm8994_ldo2_device
+};
+#endif
 static struct platform_device *wm8958_reg_devices[] __initdata = {
 	&vwm89941_device,
 	&vwm89942_device
@@ -103,6 +114,22 @@ static struct regulator_init_data wm8994_ldo1_data = {
 	.consumer_supplies	= &wm8994_avdd1_supply,
 };
 
+static struct fixed_voltage_config wm8994_ldo1_config = {
+	.supply_name	= "V_BAT_X",
+	.microvolts	= 3700000,
+	.gpio		= -EINVAL,
+	.init_data  = &wm8994_ldo1_data,
+};
+
+static struct platform_device wm8994_ldo1_device = {
+	.name = "reg-fixed-voltage",
+	.id = PLATFORM_DEVID_AUTO,
+	.dev = {
+		.platform_data = &wm8994_ldo1_config,
+	},
+};
+
+
 static struct regulator_init_data wm8994_ldo2_data = {
 	.constraints	= {
 		.always_on	= 1,
@@ -110,6 +137,21 @@ static struct regulator_init_data wm8994_ldo2_data = {
 	},
 	.num_consumer_supplies	= 1,
 	.consumer_supplies	= &wm8994_dcvdd_supply,
+};
+
+static struct fixed_voltage_config wm8994_ldo2_config = {
+	.supply_name	= "V_BAT_Y",
+	.microvolts	= 3700000,
+	.gpio		= -EINVAL,
+	.init_data  = &wm8994_ldo2_data,
+};
+
+static struct platform_device wm8994_ldo2_device = {
+	.name = "reg-fixed-voltage",
+	.id = PLATFORM_DEVID_AUTO,
+	.dev = {
+		.platform_data = &wm8994_ldo2_config,
+	},
 };
 
 static struct  wm8958_custom_config custom_config = {
@@ -189,18 +231,38 @@ static int wm8994_get_irq_data(struct wm8994_pdata *pdata,
 	return codec_gpio;
 }
 
+static int wm8994_fill_mofd_pr_data(struct wm8994_pdata *pdata)
+{
+	if (!pdata) {
+		pr_err("%s: pdata is NULL\n", __func__);
+		return -EINVAL;
+	}
+
+	/* Only MOFD v0-PR0 & v1-PR1, utilizes the LDOs */
+    // fcipaq ???
+	pr_debug("%s: Assign LDOs to MOFD PR0's pdata...\n", __func__);
+	pdata->ldo[0].enable = pdata->ldo[1].enable = 0;
+	pdata->ldo[0].init_data = &wm8994_ldo1_data;
+	pdata->ldo[1].init_data = &wm8994_ldo2_data;
+	pdata->ldo_ena_always_driven = 1;
+
+	return 0;
+}
+
 void __init *wm8994_platform_data(void *info)
 {
 	struct i2c_board_info *i2c_info = (struct i2c_board_info *)info;
-	int irq = 0;
+	int irq = 0, ret = 0;
 	struct wm8994_pdata *pdata = &wm8994_pdata;
 
 	platform_add_devices(wm8958_reg_devices,
 			ARRAY_SIZE(wm8958_reg_devices));
 
-	pdata = &wm8994_mofd_pr_pdata;
-	if (!pdata)
-		return NULL;
+	/* if it is not VV, then use PR pdata */
+		pdata = &wm8994_mofd_pr_pdata;
+		ret = wm8994_fill_mofd_pr_data(pdata);
+		if (ret < 0)
+			return NULL;
 
 	irq = wm8994_get_irq_data(pdata, i2c_info, "audiocodec_int");
 	if (irq < 0)

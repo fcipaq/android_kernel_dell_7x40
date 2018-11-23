@@ -29,11 +29,7 @@
 #include "pwr_mgmt.h"
 #include "mrfld_clock.h"
 #include "mrfld_s3d.h"
-
-#ifdef CONFIG_SUPPORT_MIPI
-#include "mdfld_dsi_output.h"
 #include "mdfld_dsi_dbi_dsr.h"
-#endif
 /* FIXME may delete after MRFLD PO */
 #include "mrfld_display.h"
 #include "mdfld_csc.h"
@@ -240,7 +236,6 @@ int psb_intel_panel_fitter_pipe(struct drm_device *dev)
 /** Loads the palette/gamma unit for the CRTC with the prepared values */
 void psb_intel_crtc_load_lut(struct drm_crtc *crtc)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_device *dev = crtc->dev;
 	struct drm_psb_private *dev_priv =
 	    (struct drm_psb_private *)dev->dev_private;
@@ -303,7 +298,6 @@ void psb_intel_crtc_load_lut(struct drm_crtc *crtc)
 		}
 
 	}
-#endif
 }
 
 #ifndef CONFIG_X86_MRST
@@ -511,7 +505,6 @@ static void psb_intel_crtc_destroy(struct drm_crtc *crtc)
 int mdfld_intel_crtc_set_gamma(struct drm_device *dev,
 				struct gamma_setting *setting_data)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv = NULL;
 	struct mdfld_dsi_hw_context *ctx = NULL;
 	struct mdfld_dsi_hw_registers *regs;
@@ -640,9 +633,9 @@ int mdfld_intel_crtc_set_gamma(struct drm_device *dev,
 					ctx->palette[(i / 8) * 2] = 0;
 					ctx->palette[(i / 8) * 2 + 1] = temp;
 				} else {
-					REG_WRITE(regs->gamma_red_max_reg, MAX_GAMMA);
-					REG_WRITE(regs->gamma_green_max_reg, MAX_GAMMA);
-					REG_WRITE(regs->gamma_blue_max_reg, MAX_GAMMA);
+					ctx->gamma_red_max = MAX_GAMMA;
+					ctx->gamma_green_max = MAX_GAMMA;
+					ctx->gamma_blue_max = MAX_GAMMA;
 				}
 			} else {
 				if (temp < 0)
@@ -670,20 +663,17 @@ int mdfld_intel_crtc_set_gamma(struct drm_device *dev,
 					ctx->palette[(i / 8) * 2] = even_part;
 					ctx->palette[(i / 8) * 2 + 1] = odd_part;
 				} else {
-					REG_WRITE(regs->gamma_red_max_reg,
-							(integer_part << 6) |
-							(fraction_part));
-					REG_WRITE(regs->gamma_green_max_reg,
-							(integer_part << 6) |
-							(fraction_part));
-					REG_WRITE(regs->gamma_blue_max_reg,
-							(integer_part << 6) |
-							(fraction_part));
+					ctx->gamma_red_max = (integer_part << 6) |
+							(fraction_part);
+					ctx->gamma_green_max = (integer_part << 6) |
+							(fraction_part);
+					ctx->gamma_blue_max = (integer_part << 6) |
+							(fraction_part);
 					printk(KERN_ALERT
 							"max (red %x, green 0x%x, blue 0x%x)\n",
-						REG_READ(regs->gamma_red_max_reg),
-						REG_READ(regs->gamma_green_max_reg),
-						REG_READ(regs->gamma_blue_max_reg));
+						ctx->gamma_red_max,
+						ctx->gamma_green_max,
+						ctx->gamma_blue_max);
 				}
 			}
 
@@ -726,9 +716,6 @@ int mdfld_intel_crtc_set_gamma(struct drm_device *dev,
 _fun_exit:
 	mutex_unlock(&dev_priv->gamma_csc_lock);
 	return ret;
-#else
-	return 0;
-#endif
 }
 
 /*
@@ -738,7 +725,6 @@ _fun_exit:
 int mdfld_intel_crtc_set_color_conversion(struct drm_device *dev,
 					struct csc_setting *setting_data)
 {
-#ifdef CONFIG_SUPPORT_MIPI
 	struct drm_psb_private *dev_priv = NULL;
 	struct mdfld_dsi_hw_context *ctx = NULL;
 	struct mdfld_dsi_hw_registers *regs;
@@ -841,8 +827,6 @@ int mdfld_intel_crtc_set_color_conversion(struct drm_device *dev,
 		val |= (PIPEACONF_COLOR_MATRIX_ENABLE);
 		REG_WRITE(regs->pipeconf_reg, val);
 		ctx->pipeconf = val;
-		val = REG_READ(regs->dspcntr_reg);
-		REG_WRITE(regs->dspcntr_reg, val);
 	} else {
 		drm_psb_enable_color_conversion = 0;
 
@@ -855,8 +839,6 @@ int mdfld_intel_crtc_set_color_conversion(struct drm_device *dev,
 		val &= ~(PIPEACONF_COLOR_MATRIX_ENABLE);
 		REG_WRITE(regs->pipeconf_reg, val);
 		ctx->pipeconf = val;
-		val = REG_READ(regs->dspcntr_reg);
-		REG_WRITE(regs->dspcntr_reg, val);
 	}
 
 	mdfld_dsi_dsr_update_panel_fb(dsi_config);
@@ -868,10 +850,6 @@ int mdfld_intel_crtc_set_color_conversion(struct drm_device *dev,
 _fun_exit:
 	mutex_unlock(&dev_priv->gamma_csc_lock);
 	return ret;
-
-#else
-	return 0;
-#endif
 }
 static const struct drm_crtc_helper_funcs mrfld_helper_funcs;
 const struct drm_crtc_funcs mdfld_intel_crtc_funcs;

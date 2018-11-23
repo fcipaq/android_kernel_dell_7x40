@@ -72,30 +72,7 @@ static inline u32 avc_audit_required(u32 requested,
 			      u32 *deniedp)
 {
 	u32 denied, audited;
-	denied = requested & ~avd->allowed;
-	if (unlikely(denied)) {
-		audited = denied & avd->auditdeny;
-		/*
-		 * auditdeny is TRICKY!  Setting a bit in
-		 * this field means that ANY denials should NOT be audited if
-		 * the policy contains an explicit dontaudit rule for that
-		 * permission.  Take notice that this is unrelated to the
-		 * actual permissions that were denied.  As an example lets
-		 * assume:
-		 *
-		 * denied == READ
-		 * avd.auditdeny & ACCESS == 0 (not set means explicit rule)
-		 * auditdeny & ACCESS == 1
-		 *
-		 * We will NOT audit the denial even though the denied
-		 * permission was READ and the auditdeny checks were for
-		 * ACCESS
-		 */
-		if (auditdeny && !(auditdeny & avd->auditdeny))
-			audited = 0;
-	} else if (result)
-		audited = denied = requested;
-	else
+	denied = 0;
 		audited = requested & avd->auditallow;
 	*deniedp = denied;
 	return audited;

@@ -500,6 +500,9 @@ void rmi4_button_remove(struct rmi4_fn *);
 
 int rmi4_fw_update(struct rmi4_data *pdata,
 		struct rmi4_fn_desc *f01_pdt, struct rmi4_fn_desc *f34_pdt);
+int synaptics_rmi4_apen_init(struct rmi4_data *rmi4_data);
+void synaptics_rmi4_apen_attn_check(struct rmi4_data *rmi4_data,
+	unsigned char intr_mask);
 
 #ifdef CONFIG_DEBUG_FS
 int rmi4_ana_data_detect(struct rmi4_data *pdata,

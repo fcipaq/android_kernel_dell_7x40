@@ -1532,6 +1532,9 @@ static int psb_driver_load(struct drm_device *dev, unsigned long chipset)
 		pm_reg = 0x3c; //HDMISS
 		power_up(pm_reg,pm_mask);
 
+		pm_reg = 0x39; //ATOMISP
+		power_up(pm_reg,pm_mask);
+
 		pm_reg = 0x3f;
 		pm_mask = intel_mid_msgbus_read32(0x04, pm_reg);
 	}
@@ -1772,6 +1775,8 @@ static int psb_driver_load(struct drm_device *dev, unsigned long chipset)
 
 	/*initialize the MSI for MRST */
 	if (IS_MID(dev)) {
+        //fcipaq: ???
+        pci_set_master(dev->pdev);
 		if (pci_enable_msi(dev->pdev)) {
 			DRM_ERROR("Enable MSI failed!\n");
 		} else {
@@ -4106,8 +4111,8 @@ static int psb_proc_init(struct drm_minor *minor)
         struct proc_dir_entry *csc_setting;
 #ifdef CONFIG_SUPPORT_HDMI
 	psb_hdmi_proc_init(minor);
-#endif
         csc_setting = proc_create_data(CSC_PROC_ENTRY, 0644, minor->proc_root, &psb_csc_proc_fops, minor);
+#endif
 
 	return 0;
 }

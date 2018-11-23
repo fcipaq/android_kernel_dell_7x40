@@ -2,7 +2,7 @@
 obj-y += platform_sst_audio.o
 obj-y += platform_mrfl_regulator.o
 obj-y += platform_soc_thermal.o
-obj-$(subst m,y,$(CONFIG_SND_MOOR_PLATFORM)) += platform_mrfld_audio.o
+obj-$(subst m,y,$(CONFIG_SND_MOOR_MACHINE)) += platform_mrfld_audio.o
 obj-y += platform_ipc.o
 obj-y += platform_i2c_gpio.o
 obj-y += platform_msic.o
@@ -27,6 +27,7 @@ obj-$(subst m,y,$(CONFIG_CHARGER_BQ24192)) += platform_bq24192.o
 obj-$(subst m,y,$(CONFIG_BQ24261_CHARGER)) += platform_bq24261.o
 obj-$(subst m,y,$(CONFIG_SND_SOC_WM8994)) += platform_wm8994.o
 obj-$(subst m,y,$(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4_FORK)) += platform_rmi4.o
+obj-$(subst m,y,$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX)) += platform_synaptics_dsx.o
 obj-$(subst m,y,$(CONFIG_TOUCHSCREEN_R69001_I2C)) += platform_r69001.o
 obj-$(subst m,y,$(CONFIG_NFC_PN544_PLATFORM_DATA)) += platform_pn544.o
 obj-$(subst m,y,$(CONFIG_SENSORS_LSM303_MAG)) += platform_lsm303.o

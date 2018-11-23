@@ -73,7 +73,8 @@ static int dapm_up_seq[] = {
 	[snd_soc_dapm_hp] = 10,
 	[snd_soc_dapm_spk] = 10,
 	[snd_soc_dapm_line] = 10,
-	[snd_soc_dapm_post] = 11,
+	[snd_soc_dapm_post_supply] = 11,
+	[snd_soc_dapm_post] = 12,
 };
 
 static int dapm_down_seq[] = {
@@ -101,6 +102,7 @@ static int dapm_down_seq[] = {
 	[snd_soc_dapm_clock_supply] = 12,
 	[snd_soc_dapm_regulator_supply] = 12,
 	[snd_soc_dapm_supply] = 12,
+	[snd_soc_dapm_post_supply] = 12,
 	[snd_soc_dapm_post] = 13,
 };
 
@@ -432,6 +434,7 @@ static void dapm_set_path_status(struct snd_soc_dapm_widget *w,
 	case snd_soc_dapm_supply:
 	case snd_soc_dapm_regulator_supply:
 	case snd_soc_dapm_clock_supply:
+	case snd_soc_dapm_post_supply:
 	case snd_soc_dapm_aif_in:
 	case snd_soc_dapm_aif_out:
 	case snd_soc_dapm_dai_in:
@@ -829,6 +832,7 @@ static int is_connected_output_ep(struct snd_soc_dapm_widget *widget,
 	case snd_soc_dapm_supply:
 	case snd_soc_dapm_regulator_supply:
 	case snd_soc_dapm_clock_supply:
+	case snd_soc_dapm_post_supply:
 		return 0;
 	default:
 		break;
@@ -922,6 +926,7 @@ static int is_connected_input_ep(struct snd_soc_dapm_widget *widget,
 	case snd_soc_dapm_supply:
 	case snd_soc_dapm_regulator_supply:
 	case snd_soc_dapm_clock_supply:
+	case snd_soc_dapm_post_supply:
 		return 0;
 	default:
 		break;
@@ -1600,6 +1605,7 @@ static void dapm_widget_set_power(struct snd_soc_dapm_widget *w, bool power,
 	case snd_soc_dapm_supply:
 	case snd_soc_dapm_regulator_supply:
 	case snd_soc_dapm_clock_supply:
+	case snd_soc_dapm_post_supply:
 		/* Supplies can't affect their outputs, only their inputs */
 		break;
 	default:
@@ -1709,6 +1715,7 @@ static int dapm_power_widgets(struct snd_soc_dapm_context *dapm, int event)
 			case snd_soc_dapm_supply:
 			case snd_soc_dapm_regulator_supply:
 			case snd_soc_dapm_clock_supply:
+			case snd_soc_dapm_post_supply:
 			case snd_soc_dapm_micbias:
 				if (d->target_bias_level < SND_SOC_BIAS_STANDBY)
 					d->target_bias_level = SND_SOC_BIAS_STANDBY;
@@ -2064,6 +2071,7 @@ static ssize_t dapm_widget_show(struct device *dev,
 		case snd_soc_dapm_supply:
 		case snd_soc_dapm_regulator_supply:
 		case snd_soc_dapm_clock_supply:
+		case snd_soc_dapm_post_supply:
 			if (w->name)
 				count += sprintf(buf + count, "%s: %s\n",
 					w->name, w->power ? "On":"Off");
@@ -2319,6 +2327,7 @@ static int snd_soc_dapm_add_route(struct snd_soc_dapm_context *dapm,
 	case snd_soc_dapm_supply:
 	case snd_soc_dapm_regulator_supply:
 	case snd_soc_dapm_clock_supply:
+	case snd_soc_dapm_post_supply:
 	case snd_soc_dapm_aif_in:
 	case snd_soc_dapm_aif_out:
 	case snd_soc_dapm_dai_in:
@@ -3156,6 +3165,7 @@ snd_soc_dapm_new_control(struct snd_soc_dapm_context *dapm,
 	case snd_soc_dapm_supply:
 	case snd_soc_dapm_regulator_supply:
 	case snd_soc_dapm_clock_supply:
+	case snd_soc_dapm_post_supply:
 		w->power_check = dapm_supply_check_power;
 		break;
 	default:

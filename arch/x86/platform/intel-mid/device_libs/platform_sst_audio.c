@@ -17,6 +17,7 @@
 #include <asm/platform_sst_audio.h>
 #include <asm/intel-mid.h>
 #include <asm/intel_sst_mrfld.h>
+#include <asm/platform_byt_audio.h>
 #include <sound/asound.h>
 
 static struct sst_platform_data sst_platform_pdata;
@@ -90,6 +91,8 @@ static void set_mrfld_platform_config(void)
 
 static void  populate_platform_data(void)
 {
+//	sst_platform_pdata.spid = &spid;
+
 	set_mrfld_platform_config();
 }
 
